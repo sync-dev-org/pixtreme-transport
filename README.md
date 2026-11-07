@@ -16,7 +16,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.5.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.7.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
@@ -44,6 +44,14 @@ Modules that use the core's native API build against the SDK in the installed wh
 import pixtreme.transport
 
 print(pixtreme.transport.get_cmake_dir())
+```
+
+Importing `pixtreme.transport` also imports pixtreme and CuPy. If your build environment cannot load them, for example a container user without a writable home directory, read the same directory of the installed wheel from the package metadata instead:
+
+```python
+import importlib.metadata
+
+print(importlib.metadata.distribution("pixtreme-transport").locate_file("pixtreme/transport/cmake"))
 ```
 
 Pass that directory to CMake as `pixtreme_transport_DIR`. In the module's `CMakeLists.txt`, discover the package and link its public target:
