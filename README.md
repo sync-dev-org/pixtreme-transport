@@ -28,7 +28,7 @@ The testing package is included in the core wheel and shares its version. Ordina
 
 ## Supported environments
 
-PyPI wheels support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`), with separate wheels for CPython 3.12 and 3.13. Runtime use requires an NVIDIA GPU and an NVIDIA driver that supports the CUDA 13 runtime. Native GPU code targets sm 86, sm 89 and sm 120.
+PyPI wheels support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`), with separate wheels for CPython 3.12 and 3.13. Runtime use requires an NVIDIA GPU and an NVIDIA driver that supports the CUDA 13 runtime.
 
 PyPI releases contain wheels only; no source distribution is uploaded. Installation on another operating system, CPU architecture or Python version fails with no matching distribution. The package does not provide a CPU-only runtime mode.
 
