@@ -16,7 +16,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.7.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.14.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
@@ -35,6 +35,14 @@ PyPI releases contain wheels only; no source distribution is uploaded. Installat
 ## Protocol and codec modules
 
 Install only the module distributions needed by your application. Modules use distribution names of the form `pixtreme-transport-<module>` and import names of the form `pixtreme.transport.<module>`. Each module documents its supported protocols, codecs and additional dependencies. Installing the core alone does not install protocol or codec modules.
+
+## Create sessions by module name
+
+C and C++ programs can create an entrance or exit session from a module's name without linking the module. `<pixtreme/transport/c/module.h>` declares `pixtreme_transport_module_create_entrance` and `pixtreme_transport_module_create_exit`. Each takes the module name (`[a-z][a-z0-9_]*`, the same `<module>` as the import name), a sized request record (the device and the caller's frame buffer, plus the core exit settings for an exit) and an array of name/value string settings. The core opens only `<module>/lib/libpixtreme_transport_<module>_entry.so` under the installed `pixtreme/transport` directory, located from the core's own shared library, calls its `pixtreme_transport_module_entry` function and checks the descriptor version and the core ABI. It does not scan directories or read environment variables. On success the call returns an unopened session; start it with the existing open operation.
+
+Failures carry stable reasons: `invalid-module-name`, `module-not-found` (its guidance names the distribution `pixtreme-transport-<module>` to install), `module-load-failed`, `module-entry-missing`, `module-abi-mismatch`, `module-direction-unavailable`, `invalid-module-option` and `module-create-failed`. Each call creates an independent instance that can be used on another thread; a loaded module library stays loaded until the process ends. Module discovery is implemented for Linux.
+
+Setting names use `.` for nesting, for example `connection.channel`. Values are text: decimal integers with an optional leading `-` (no `+`, spaces, `0x` or fractions), `true` or `false`, and rationals `<numerator>/<denominator>` with a positive denominator. Each module documents its keys. Errors name the key and never include its value. Module authors and C++ callers can use the header-only `<pixtreme/transport/module.h>`, which provides `pixtreme::transport::module::Options` for parsing and validating settings, `create_entrance` and `create_exit` returning an owning `Handle`, and `creation_boundary` for converting setting errors into the C error contract.
 
 ## Build a C or C++ module
 
@@ -119,5 +127,7 @@ Import `pixtreme.transport.native` explicitly when an extension needs `export_ha
 Each exported capsule owns one C handle reference. `import_handle` checks the name, native ABI and handle kind, retains independently, and leaves the capsule usable. Its returned value survives destruction of the capsule. A module that borrows a capsule pointer and uses it later must retain its own reference and release it after its final use. Keep the GIL while creating or using Python objects and capsules; native callbacks use retained C handles. Owners requiring Python cleanup use `PIXTREME_TRANSPORT_OWNER_DEFER_COLLECTION` and GIL-held explicit collection.
 
 The bridge supports frames, completion signals, frame buffers, exit settings, entrance and exit sessions, number scopes, timing, ancillary items/data, frame audio, stream information/snapshots and frame items. Buffers share the same queue; frames share their allocation and completion. Exporting mutable exit settings captures their current values; importing creates independent mutable settings. Small record-only values travel in their enclosing C handle information.
+
+An input read can be cancelled by its caller without stopping the session: `pixtreme_transport_entrance_next_with_options` in C, `Entrance::next(StopToken)` and `Entrance::next(std::stop_token)` in C++, and `Entrance.next(stop=...)` with a `StopSource` in Python. Cancellation affects only that call's wait and take; reception, PCM, the session and the caller's buffer keep running. A recorded fatal error and the first unread recoverable error are still returned before cancellation. A read cancelled before its return preparation starts leaves the queue and the visible snapshot unchanged and returns no item, like the end of the stream; once preparation has started, a successful preparation delivers the picture. Pass a new stop state to read again from the same session.
 
 C++ buffer and input-session wrappers prepare their cached return values before removing a queued frame. If preparation fails, the queue and visible input snapshot stay unchanged. The prepared C operations document their synchronous callback and non-reentrancy rules. A frame left queued after a failed preparation remains subject to ordinary overflow.
