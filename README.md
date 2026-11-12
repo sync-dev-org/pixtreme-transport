@@ -16,7 +16,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.17.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.19.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
@@ -47,53 +47,39 @@ Setting names use `.` for nesting, for example `connection.channel`. Values are 
 ## Build a C or C++ module
 
 The [public core Releases](https://github.com/sync-dev-org/pixtreme-transport/releases)
-provide a prebuilt SDK and Conan recipes. The SDK contains the same shared
+provide a prebuilt SDK and `release.json`. The SDK contains the same shared
 library, headers and CMake configuration as the release wheel under
-`pixtreme/transport/{include,lib,cmake}`. Obtaining it requires no core or pixtreme
-source checkout, no compilation of either library, no GitHub authentication and
-no Python wheel. Current SDKs support Linux x86_64 with glibc 2.28 or later.
-C++ consumers need a C++20 compiler, CMake 3.31 or later, Ninja and the Conan 2
-CLI version recorded in the recipe archive's `recipes.json`. Python 3.12 or
-later runs the acquisition script and Conan; CMake does not search for Python,
+`pixtreme/transport/{include,lib,cmake}`. Current SDKs support Linux x86_64 with
+glibc 2.28 or later. Neither core nor pixtreme is compiled when obtaining these
+SDKs, and no Python wheel or C++ source checkout is needed.
+
+The core and pixtreme Conan recipes are maintained together in the private
+[sync-dev-org/conan-recipes](https://github.com/sync-dev-org/conan-recipes)
+repository. Recipe acquisition needs Conan 2.34.0, Python 3, `sha256sum`, `tar`,
+and a host `gh` login that can read that repository. C++ consumers also need a
+C++20 compiler, CMake 3.31 or later and Ninja. CMake does not search for Python,
 nanobind or a CUDA compiler when building the consumer.
 
-In a new directory, choose a core release and verify its recipe archive before
-extracting or running it:
+Choose a core release and read its checked provenance record:
 
 ```bash
 core_version=X.Y.Z
 base="https://github.com/sync-dev-org/pixtreme-transport/releases/download/v${core_version}"
-curl --fail --location --remote-name "${base}/pixtreme_transport-${core_version}-recipes.tar.gz"
+curl --fail --location --remote-name "${base}/release.json"
 curl --fail --location --remote-name "${base}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
-mkdir recipes
-tar -xzf "pixtreme_transport-${core_version}-recipes.tar.gz" -C recipes
-python3 -c 'import json; print("conan==" + json.load(open("recipes/recipes.json"))["conan_version"])'
-```
-
-Install that Conan CLI version if needed. The archive includes `release.json`,
-which records the core version, the pixtreme SDK version actually used to build
-it, the wheel's runtime dependency lower bound, and the SDK archive's public URL
-and SHA256. Its generated recipe requires pixtreme at that recorded SDK version
-or later, with `shared=True`. The recipe's settings are OS and architecture;
-compiler version and build type do not select a different binary.
-
-Use the included script to download and verify both core and pixtreme recipe
-archives against their respective Release `SHA256SUMS`, then export their
-recorded versions into a new, empty Conan home:
-
-```bash
-python3 recipes/sdk_release.py fetch "$core_version" --work-dir "$PWD/deps"
+pixtreme_version=$(python3 -c 'import json; print(json.load(open("release.json"))["pixtreme_sdk_version"])')
 export CONAN_HOME="$PWD/deps/conan-home"
+mkdir -p "$CONAN_HOME"
 ```
 
-The script obtains the pixtreme recipe release version from `release.json`; do
-not maintain a separate pixtreme URL, hash or reference. It also checks pinned
-recipe references from `recipes.json`. Its download and export steps use only
-public Release assets. The SDK recipes subsequently verify their SDK downloads
-by SHA256. Even `--build=missing` retrieves and packages these binaries without
-compiling core or pixtreme. The package dependency graph contains only the two
-shared SDKs; CUDA build components and Catch2 are absent.
+`release.json` records the core version, pixtreme SDK version used to build it,
+wheel runtime lower bound, wheel hash, and SDK archive's public URL and SHA256.
+The core recipe's default `from_source=False` downloads and verifies the public
+SDK without compiling it. Both core and pixtreme use `shared=True`; core requires
+pixtreme at the recorded build SDK version or later. The default SDK package
+identity depends only on OS and architecture. The consumer's dependency graph
+contains the two shared SDKs and excludes CUDA build components and Catch2.
 
 Create `conanfile.py` in your consumer directory, replacing `X.Y.Z` with your
 chosen core minimum:
@@ -109,8 +95,25 @@ class Consumer(ConanFile):
     generators = "CMakeDeps", "CMakeToolchain"
 ```
 
+Use the [shared recipe acquisition instructions](https://github.com/sync-dev-org/conan-recipes#using-a-recipe)
+with a published shared Release tag that contains your core version. In that
+example, export only the two required recipes, replacing its export commands
+with these commands inside the same verified extraction directory:
+
+```bash
+conan export recipes/pixtreme --version="$pixtreme_version"
+conan export recipes/pixtreme-transport --version="$core_version"
+```
+
+The shared acquisition procedure passes the host's `gh` token directly into a
+temporary Conan `source_credentials.json`, downloads the archive and
+`SHA256SUMS` through GitHub API asset URLs, deletes the credential home, verifies
+the archive, and exports into your selected `CONAN_HOME`. Keep shell tracing and
+debug logs disabled. Commit the consumer lock generated by that procedure.
+Recipes stay in this shared repository; core Releases contain no recipe archive.
+
 Create your `CMakeLists.txt`, then install with the profiles appropriate for your
-compiler and build your consumer. The script detects a default profile for the
+compiler and build your consumer. The shared acquisition procedure detects a default profile for the
 host; you can supply your own host and build profiles to `conan install`.
 
 ```cmake
@@ -122,7 +125,8 @@ target_link_libraries(example PRIVATE pixtreme::transport)
 ```
 
 ```bash
-conan install . --no-remote --build=missing --output-folder build --lockfile-out conan.lock
+conan lock create . --no-remote --lockfile="" --lockfile-out conan.lock
+conan install . --lockfile conan.lock --no-remote --build=missing --output-folder build
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=build/conan_toolchain.cmake
 cmake --build build
@@ -166,6 +170,16 @@ Pass that directory to CMake as `pixtreme_transport_DIR`. In the module's `CMake
 find_package(pixtreme_transport CONFIG REQUIRED)
 target_link_libraries(your_module PRIVATE pixtreme::transport)
 ```
+
+Source builds obtain the CUDA components from the locked `cuda-toolkit` recipe
+in the private `sync-dev-org/conan-recipes` Release. Install the host GitHub CLI
+with `sudo apt-get install gh` and authenticate with `gh auth login` before the
+first checkout build. The bootstrap passes the host token through a temporary
+Conan `source_credentials.json` and removes it immediately after downloading;
+prepared builds reuse the locked recipes. Creating an sdist copies the locked
+CUDA recipe into that archive, so rebuilding it needs no GitHub token. The
+[wheel build instructions](wheel-build/README.md) describe how to supply the
+verified archive to a container without credentials.
 
 Build-time pixtreme headers and libraries come from its public release SDK through Conan. Python runtime uses the pixtreme wheel. Core checks its own build's pixtreme ABI after its native ABI check.
 
