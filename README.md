@@ -38,11 +38,56 @@ Install only the module distributions needed by your application. Modules use di
 
 ## Create sessions by module name
 
-C and C++ programs can create an entrance or exit session from a module's name without linking the module. `<pixtreme/transport/c/module.h>` declares `pixtreme_transport_module_create_entrance` and `pixtreme_transport_module_create_exit`. Each takes the module name (`[a-z][a-z0-9_]*`, the same `<module>` as the import name), a sized request record (the device and the caller's frame buffer, plus the core exit settings for an exit) and an array of name/value string settings. The core opens only `<module>/lib/libpixtreme_transport_<module>_entry.so` under the installed `pixtreme/transport` directory, located from the core's own shared library, calls its `pixtreme_transport_module_entry` function and checks the descriptor version and the core ABI. It does not scan directories or read environment variables. On success the call returns an unopened session; start it with the existing open operation.
+C and C++ programs can create an entrance or exit session from a module's name. `<pixtreme/transport/c/module.h>` declares `pixtreme_transport_module_create_entrance` and `pixtreme_transport_module_create_exit`. Each takes the module name (`[a-z][a-z0-9_]*`, the same `<module>` as the import name), a sized request record (the device and the caller's frame buffer, plus the core exit settings for an exit) and an array of name/value string settings. The core selects a registered builtin entry when its descriptor declares that name. For other names, the shared core opens only `<module>/lib/libpixtreme_transport_<module>_entry.so` under the installed `pixtreme/transport` directory, located from the core's own shared library, and calls its `pixtreme_transport_module_entry` function. Both routes check the descriptor version and the core ABI. A core statically embedded from a source build returns `module-not-found` for names absent from its builtin list, including when no list was registered. It does not search or load shared module libraries. The core does not scan directories or read environment variables. On success the call returns an unopened session; start it with the existing open operation.
 
 Failures carry stable reasons: `invalid-module-name`, `module-not-found` (its guidance names the distribution `pixtreme-transport-<module>` to install), `module-load-failed`, `module-entry-missing`, `module-abi-mismatch`, `module-direction-unavailable`, `invalid-module-option` and `module-create-failed`. Each call creates an independent instance that can be used on another thread; a loaded module library stays loaded until the process ends. Module discovery is implemented for Linux.
 
 Setting names use `.` for nesting, for example `connection.channel`. Values are text: decimal integers with an optional leading `-` (no `+`, spaces, `0x` or fractions), `true` or `false`, and rationals `<numerator>/<denominator>` with a positive denominator. Each module documents its keys. Errors name the key and never include its value. Module authors and C++ callers can use the header-only `<pixtreme/transport/module.h>`, which provides `pixtreme::transport::module::Options` for parsing and validating settings, `create_entrance` and `create_exit` returning an owning `Handle`, and `creation_boundary` for converting setting errors into the C error contract.
+
+Applications that link modules into their executable pass their entry functions
+to `pixtreme_transport_module_register_builtin_entries(entries, count, &error)`
+once, before any name-based creation call. Each linked module supplies
+`pixtreme_transport_module_entry_<module>` with the same descriptor and factories
+as its shared entry. Call the C++ wrapper during initialization, then use the
+usual module name and settings when creating sessions:
+
+```cpp
+#include <pixtreme/transport/abi.h>
+#include <pixtreme/transport/module.h>
+#include <array>
+
+extern "C" const pixtreme_transport_module_descriptor*
+pixtreme_transport_module_entry_my_module(); // Its descriptor names "my_module".
+
+void initialize_modules() { // Call once before starting session-creation threads.
+    pixtreme::transport::require_abi();
+    const std::array<pixtreme_transport_module_entry_fn, 1> entries{
+        pixtreme_transport_module_entry_my_module};
+    pixtreme::transport::module::register_builtin_entries(entries);
+}
+
+pixtreme::transport::Handle make_input(
+    const pixtreme_transport_module_entrance_request& request,
+    std::span<const pixtreme_transport_module_option> settings) {
+    return pixtreme::transport::module::create_entrance("my_module", request, settings);
+}
+```
+
+The core accepts or rejects the complete list. Rejection leaves the previous
+state intact; an accepted list stays fixed until process exit. The caller may
+release its array after registration, but the entry functions, descriptors and
+module code must remain available. A second registration or one after any
+creation attempt fails. Concurrent registration and creation have one of the
+two serial outcomes. An empty list is valid. Errors from a selected builtin
+(ABI, direction or factory) never cause a fallback to the shared module with the
+same name. Programs using the shared core retain shared module discovery for
+names absent from the list, including when they do not register a list.
+
+Registration adds these stable reasons: `module-entries-invalid`,
+`module-entry-null`, `module-descriptor-invalid`, `module-name-duplicate`,
+`module-entries-already-registered` and `module-registration-closed`. Invalid
+descriptor names and versions use `invalid-module-name` and
+`module-abi-mismatch`. The C++ wrapper throws the existing SDK exception types.
 
 ## Build a C or C++ module
 
