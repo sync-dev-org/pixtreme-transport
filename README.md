@@ -16,7 +16,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.14.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.17.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
@@ -46,7 +46,105 @@ Setting names use `.` for nesting, for example `connection.channel`. Values are 
 
 ## Build a C or C++ module
 
-Modules that use the core's native API build against the SDK in the installed wheel. Find its CMake package directory with:
+The [public core Releases](https://github.com/sync-dev-org/pixtreme-transport/releases)
+provide a prebuilt SDK and Conan recipes. The SDK contains the same shared
+library, headers and CMake configuration as the release wheel under
+`pixtreme/transport/{include,lib,cmake}`. Obtaining it requires no core or pixtreme
+source checkout, no compilation of either library, no GitHub authentication and
+no Python wheel. Current SDKs support Linux x86_64 with glibc 2.28 or later.
+C++ consumers need a C++20 compiler, CMake 3.31 or later, Ninja and the Conan 2
+CLI version recorded in the recipe archive's `recipes.json`. Python 3.12 or
+later runs the acquisition script and Conan; CMake does not search for Python,
+nanobind or a CUDA compiler when building the consumer.
+
+In a new directory, choose a core release and verify its recipe archive before
+extracting or running it:
+
+```bash
+core_version=X.Y.Z
+base="https://github.com/sync-dev-org/pixtreme-transport/releases/download/v${core_version}"
+curl --fail --location --remote-name "${base}/pixtreme_transport-${core_version}-recipes.tar.gz"
+curl --fail --location --remote-name "${base}/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+mkdir recipes
+tar -xzf "pixtreme_transport-${core_version}-recipes.tar.gz" -C recipes
+python3 -c 'import json; print("conan==" + json.load(open("recipes/recipes.json"))["conan_version"])'
+```
+
+Install that Conan CLI version if needed. The archive includes `release.json`,
+which records the core version, the pixtreme SDK version actually used to build
+it, the wheel's runtime dependency lower bound, and the SDK archive's public URL
+and SHA256. Its generated recipe requires pixtreme at that recorded SDK version
+or later, with `shared=True`. The recipe's settings are OS and architecture;
+compiler version and build type do not select a different binary.
+
+Use the included script to download and verify both core and pixtreme recipe
+archives against their respective Release `SHA256SUMS`, then export their
+recorded versions into a new, empty Conan home:
+
+```bash
+python3 recipes/sdk_release.py fetch "$core_version" --work-dir "$PWD/deps"
+export CONAN_HOME="$PWD/deps/conan-home"
+```
+
+The script obtains the pixtreme recipe release version from `release.json`; do
+not maintain a separate pixtreme URL, hash or reference. It also checks pinned
+recipe references from `recipes.json`. Its download and export steps use only
+public Release assets. The SDK recipes subsequently verify their SDK downloads
+by SHA256. Even `--build=missing` retrieves and packages these binaries without
+compiling core or pixtreme. The package dependency graph contains only the two
+shared SDKs; CUDA build components and Catch2 are absent.
+
+Create `conanfile.py` in your consumer directory, replacing `X.Y.Z` with your
+chosen core minimum:
+
+```python
+from conan import ConanFile
+
+
+class Consumer(ConanFile):
+    settings = "os", "arch", "compiler", "build_type"
+    requires = "pixtreme-transport/[>=X.Y.Z]"
+    default_options = {"pixtreme-transport/*:shared": True}
+    generators = "CMakeDeps", "CMakeToolchain"
+```
+
+Create your `CMakeLists.txt`, then install with the profiles appropriate for your
+compiler and build your consumer. The script detects a default profile for the
+host; you can supply your own host and build profiles to `conan install`.
+
+```cmake
+cmake_minimum_required(VERSION 3.31)
+project(example LANGUAGES CXX)
+find_package(pixtreme_transport CONFIG REQUIRED)
+add_executable(example main.cpp)
+target_link_libraries(example PRIVATE pixtreme::transport)
+```
+
+```bash
+conan install . --no-remote --build=missing --output-folder build --lockfile-out conan.lock
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=build/conan_toolchain.cmake
+cmake --build build
+```
+
+Retain your `conan.lock` and pass `--lockfile conan.lock` on later installs. Its
+recipe revisions identify the selected SDKs. Keep dependency declarations as
+lower bounds without an upper bound or exact version pin. CMake uses the SDK's
+original `pixtreme_transport` package and `pixtreme::transport` target, including
+the transitive `pixtreme::pixtreme` dependency. The CMake package version is the
+core distribution's `X.Y.Z`. Call `pixtreme::transport::require_abi()` before other
+core operations; it checks both core's native ABI and core's build header against
+the loaded pixtreme library. ABI compatibility, rather than an exact distribution
+version pin, determines whether runtime libraries can be used together.
+
+Arrange runtime lookup for the chosen installation, for example with Conan's
+runtime environment during standalone development, and load one core library
+and one pixtreme library in each process. Module wheels retain relative
+`$ORIGIN` paths to their installed dependencies and do not copy those libraries.
+
+The installed wheel also retains its native SDK. Existing C and C++ module
+builds can find its CMake package directory with:
 
 ```python
 import pixtreme.transport
@@ -68,6 +166,8 @@ Pass that directory to CMake as `pixtreme_transport_DIR`. In the module's `CMake
 find_package(pixtreme_transport CONFIG REQUIRED)
 target_link_libraries(your_module PRIVATE pixtreme::transport)
 ```
+
+Build-time pixtreme headers and libraries come from its public release SDK through Conan. Python runtime uses the pixtreme wheel. Core checks its own build's pixtreme ABI after its native ABI check.
 
 The CMake package version is the distribution's `X.Y.Z`; an optional requested version sets a lower bound. Keep the core library's location in the module's installed RPATH using a path relative to `$ORIGIN`. Do not copy the core library into the module's wheel.
 
