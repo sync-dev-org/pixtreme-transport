@@ -16,7 +16,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.19.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.22.1`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
@@ -191,6 +191,156 @@ Arrange runtime lookup for the chosen installation, for example with Conan's
 runtime environment during standalone development, and load one core library
 and one pixtreme library in each process. Module wheels retain relative
 `$ORIGIN` paths to their installed dependencies and do not copy those libraries.
+
+### Embed a source-built static core
+
+From core 0.32.0, C and C++ consumers can embed a core built from source.
+The released SDKs contain shared libraries only: requesting `shared=False`
+with `from_source=False` stops with the reason and the remedy to build from
+source with `from_source=True` on 0.32.0 or later. Choose the options together:
+
+| Library | Static core and static pixtreme | Static core and prebuilt shared pixtreme |
+|---|---|---|
+| `pixtreme-transport/*:from_source` | `True` | `True` |
+| `pixtreme-transport/*:shared` | `False` | `False` |
+| `pixtreme/*:from_source` | `True` | `False` |
+| `pixtreme/*:shared` | `False` | `True` |
+
+Each process must contain exactly one core and one pixtreme. The artifact
+embedding the static core must be the process's only core: do not also load
+the core shared library or another artifact embedding a core. The same rule
+applies to an embedded pixtreme, including copies installed through Python
+wheels or Conan.
+
+Use a fresh `CONAN_HOME` and the shared recipe acquisition procedure above,
+selecting conan-recipes `v1.18.0` for this example. In its verified extraction
+directory, export these recipes into that home:
+
+```bash
+conan export recipes/pixtreme-transport --version=0.32.0
+conan export recipes/pixtreme --version=2.21.0
+conan export recipes/cuda-toolkit --version=13.2.2
+conan export recipes/libjpeg-turbo --version=3.2.1
+```
+
+Set the consumer's requirement to `pixtreme-transport/[>=0.32.0]`; the recipe
+resolves pixtreme 2.21.0 from these exports. The core keeps its pixtreme lower
+bound; this example's selected version is recorded in the consumer lock.
+Building pixtreme from source also takes `libdeflate`, `libwebp` and `zlib`
+from ConanCenter, so keep that remote enabled and omit `--no-remote` below.
+`libjpeg-turbo` comes from the same verified conan-recipes archive.
+
+Run the remaining commands from your consumer directory, outside the core
+checkout. Use the CMake project above and link only `pixtreme::transport`.
+For a C source file, enable `project(example LANGUAGES C CXX)` so CMake can
+link the core's C++ implementation. Do not add archive paths, CUDA roots or
+individual dependency libraries to the consumer.
+
+Detect the native compiler profile and create `static-profile` to select
+C++20, at most four build jobs and your installed CMake and Ninja:
+
+```bash
+conan profile detect --exist-ok
+cat > static-profile <<'PROFILE'
+include(default)
+
+[settings]
+compiler.cppstd=20
+
+[conf]
+tools.build:jobs=4
+tools.cmake.cmaketoolchain:generator=Ninja
+
+[replace_tool_requires]
+cmake/*: cmake/system
+
+[platform_tool_requires]
+cmake/system
+PROFILE
+
+static_options=(
+    -o 'pixtreme-transport/*:from_source=True'
+    -o 'pixtreme-transport/*:shared=False'
+    -o 'pixtreme/*:from_source=True'
+    -o 'pixtreme/*:shared=False'
+)
+conan lock create . -pr:a ./static-profile "${static_options[@]}" \
+    --lockfile="" --lockfile-out conan.lock
+```
+
+Source builds fetch private development tags through the GitHub API, from the
+`url` that each recipe's `conandata.yml` records for the selected version. The
+host's `gh` login must be able to read both source repositories. Export
+`recipes_dir` as the `recipes` directory of the verified extraction above, then
+place the token in a temporary, mode-0600 `source_credentials.json` only during
+install. The credential prefixes come from those recorded URLs:
+
+```bash
+(
+    set -eu
+    set +x
+    umask 077
+    trap 'rm -f "$CONAN_HOME/source_credentials.json"' EXIT
+    python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+
+token = subprocess.run(
+    ["gh", "auth", "token"], check=True, capture_output=True, text=True
+).stdout.strip()
+if not token:
+    raise SystemExit("gh could not supply a token")
+recipes = Path(os.environ["recipes_dir"])
+prefixes = sorted({
+    match.group(0)
+    for name in ("pixtreme-transport", "pixtreme")
+    for match in re.finditer(
+        r"https://api\.github\.com/repos/[^/\s\"']+/[^/\s\"']+/",
+        (recipes / name / "conandata.yml").read_text(encoding="utf-8"),
+    )
+})
+if len(prefixes) != 2:
+    raise SystemExit(f"expected two source repositories, found {prefixes}")
+with (Path(os.environ["CONAN_HOME"]) / "source_credentials.json").open("x") as output:
+    json.dump({"credentials": [
+        {"url": prefix, "token": token} for prefix in prefixes
+    ]}, output)
+PY
+    conan install . -pr:a ./static-profile "${static_options[@]}" \
+        --lockfile conan.lock --build=missing --output-folder build-static
+)
+cmake -S . -B build-static -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=build-static/conan_toolchain.cmake
+cmake --build build-static --parallel 4
+```
+
+The exit trap removes credentials immediately after install, including on
+failure. Keep shell tracing and Conan debug/trace logging disabled. The source
+URL entries omit the release asset's `Accept: application/octet-stream` header;
+GitHub tarball requests require different headers. Retain the consumer lock
+and reuse it for later installs. To select a static core with prebuilt shared
+pixtreme, change the last two options to `pixtreme/*:from_source=False` and
+`pixtreme/*:shared=True`, then repeat with a separate lock and build directory.
+
+The public `pixtreme::transport` target supplies
+`PIXTREME_TRANSPORT_STATIC_DEFINE`, the chosen pixtreme, CUDA's static runtime
+components and system link dependencies. The archives contain each library's
+own objects; Conan supplies dependencies to the final link. Catch2 is absent
+from this consumer graph. Building the core and the C or C++ consumer needs
+neither nvcc nor an OS CUDA toolkit. Building pixtreme itself from source uses
+nvcc supplied by the build-context `cuda-toolkit` package; the consumer receives
+the separate runtime-only package with `compiler=False`. No stage uses an OS
+CUDA toolkit or requires a manually set `CUDAToolkit_ROOT`.
+
+Call the ABI check before other core operations, as in the examples below.
+A static core creates sessions only from its builtin module entries; see
+[Create sessions by module name](#create-sessions-by-module-name) for registering
+the list and the `module-not-found` result for names absent from it.
+
+### Use the SDK installed with a wheel
 
 The installed wheel also retains its native SDK. Existing C and C++ module
 builds can find its CMake package directory with:
