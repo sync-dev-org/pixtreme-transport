@@ -16,7 +16,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.22.1`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.23.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
@@ -428,6 +428,36 @@ The exit C API is in `<pixtreme/transport/c/exit.h>`. Modules register size-pref
 
 Encode and transform results carry owner references and opaque module contexts; serialization results use the existing typed C result handle. These references survive core GPU work and known encoder/SDK reads, including failures. A successful synchronous send reports both completions; asynchronous senders report video and audio separately using the ticket. Cancellation first stops admission and records a fatal failure, then requires the module's explicit proof that all admitted external reads and callbacks have ended. A stop request or failure alone is no such proof. Close finishes core workers, joins module reads and callbacks, finishes GPU work and returns retained loans before closing the target. It leaves the caller's buffer open. Derived C++ modules keep the same hook interface through the header-only `session::Exit`, `FrameTransform`, `SerializationTransform` and `SendClock` bases.
 
+
+## Record session boundaries
+
+Create a `pixtreme.trace.Trace(capacity, 8)` before opening a session and pass it
+with `Entrance.set_trace(trace)` or `Exit.set_trace(trace)`. Pass `None` while
+closed to detach it. The session retains its own reference; a different value
+count raises an argument error and changing the sink while open raises a state
+error. Stop all recording sessions before calling `trace.read()` or exporting
+its arrays. Recording without a sink does not read the measurement clock.
+
+C callers use `pixtreme_transport_entrance_set_trace` and
+`pixtreme_transport_exit_set_trace`; C++ callers use `set_trace` with a
+`pixtreme::trace::Trace` or a borrowed `pixtreme_trace_t*`. The public constants
+in `<pixtreme/transport/c/trace.h>` describe each row: boundary kind, session
+identity, input number, epoch, sequence, work ID, send ticket and flags. The
+host measurement timestamps do not change media timing. Input put rows record
+both the attempt and whether the buffer accepted it; output rows distinguish
+selection, encode and send calls, including failures and asynchronous returns.
+A send return does not mean its asynchronous reads completed.
+
+Output modules receive borrowed `trace`, `work_id` and `trace_session_id`
+fields in the encode input and output stamp. C++ encode hooks read the same
+values with `encoding_trace()`, `encoding_work_id()` and
+`encoding_trace_session_id()`; these return null/zero outside the hook. Input
+modules borrow the sink and session identity with the entrance's `get_trace`
+and `get_trace_session_id` C operations, or `Entrance::trace()` and
+`Entrance::trace_session_id()`. Modules can record their own kinds from 1000
+upward. Match rows on `(trace_session_id, work_id)`: repeats have distinct work
+IDs, reanchor can reset period indices, and reopen restarts work IDs and tickets
+with a new session identity. The sink owns no picture, GPU storage or SDK loan.
 
 ## Exchange handles between Python extensions
 
