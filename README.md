@@ -16,7 +16,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.24.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.25.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
@@ -340,6 +340,61 @@ A static core creates sessions only from its builtin module entries; see
 [Create sessions by module name](#create-sessions-by-module-name) for registering
 the list and the `module-not-found` result for names absent from it.
 
+### Build and test from source
+
+Provide Python 3.12 or later, a C++20 compiler, GitHub CLI authentication for the
+shared recipes, and the pinned Conan CLI. CMake and Ninja come from Conan's
+`cpp/conan/profiles/tools`; do not install them on the host or through pip.
+
+```bash
+uv tool install 'conan==2.34.0'
+cd python
+uv sync --no-install-project
+uv pip install --no-deps --reinstall-package pixtreme-transport .
+cd ..
+python3 cpp/conan/prepare-tests.py
+cd python
+uv run --no-sync pytest
+uv run --no-sync ruff check
+uv run --no-sync ruff format --check
+uv run --no-sync mypy
+```
+
+The parent `pixtreme` package belongs to its dependency wheel. Development uses
+an installed core wheel. After `uv sync` or any source change, repeat both the
+`uv sync --no-install-project` and `uv pip install` commands above.
+
+For a standalone C++ build, start at the repository root:
+
+```bash
+python3 cpp/conan/prepare.py --output build/cpp-build
+. ./build/cpp-build/conanbuild.sh
+preset=$(python3 -c 'import json; print(json.load(open("build/cpp-build/CMakePresets.json"))["configurePresets"][0]["name"])')
+cd cpp
+cmake --preset "$preset"
+cmake --build --preset "$preset" --parallel 2
+```
+
+For C++ tests, run `python3 cpp/conan/prepare-tests.py`, then prepare a separate
+output with `python3 cpp/conan/prepare.py --output build/cpp-tests --tests --offline`.
+Activate that output's `conanbuild.sh`, read its preset name as above, and configure
+with `cmake --preset "$preset" -DTRANSPORT_BUILD_TESTS=ON`. Build with
+`cmake --build --preset "$preset"`, and run `CUDA_VISIBLE_DEVICES="" ctest --preset "$preset" --output-on-failure`.
+
+For Windows source builds, create the checkout with `git clone --config core.autocrlf=false <repository-url>` to preserve the license file bytes.
+
+On Windows use cmd, run `python cpp\conan\prepare.py --output build\cpp-build`,
+then `call build\cpp-build\conanbuild.bat` in that same cmd process. Change to
+`cpp` and use the generated preset's configure and build commands. Stop the batch
+on any failure. When MSVC is selected, the generated environment includes its
+compiler settings. Windows builds require an appropriate host/build profile.
+
+Use `TRANSPORT_CONAN_CACHE` for package storage and `CONAN_HOME` (or
+`TRANSPORT_CONAN_HOME`) for Conan configuration; pass the same values to
+preparation and builds. Use a fresh build directory after changing them.
+Configuration itself never runs Conan. An embedding consumer supplies the single
+toolchain and all required dependencies in its own consumer recipe and profile.
+
 ### Use the SDK installed with a wheel
 
 The installed wheel also retains its native SDK. Existing C and C++ module
@@ -369,7 +424,7 @@ target_link_libraries(your_module PRIVATE pixtreme::transport)
 Source builds obtain the CUDA components from the locked `cuda-toolkit` recipe
 in the private `sync-dev-org/conan-recipes` Release. Install the host GitHub CLI
 with `sudo apt-get install gh` and authenticate with `gh auth login` before the
-first checkout build. The bootstrap passes the host token through a temporary
+first checkout build. The preparation script passes the host token through a temporary
 Conan `source_credentials.json` and removes it immediately after downloading;
 prepared builds reuse the locked recipes. Creating an sdist copies the locked
 CUDA recipe into that archive, so rebuilding it needs no GitHub token. The
