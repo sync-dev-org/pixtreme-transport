@@ -30,9 +30,7 @@ The testing package is included in the core wheel and shares its version. Ordina
 
 ## Supported environments
 
-The wheels currently published on PyPI support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`), with separate wheels for CPython 3.12 and 3.13. Runtime use requires an NVIDIA GPU and an NVIDIA driver that supports the CUDA 13 runtime.
-
-The core also supports native Windows x86_64 (`win_amd64`). Windows wheels have not yet been published.
+The wheels published on PyPI support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`) and, from version 0.35.1, native Windows x86_64 (`win_amd64`), with separate wheels for CPython 3.12 and 3.13 on each platform. Runtime use requires an NVIDIA GPU and an NVIDIA driver that supports the CUDA 13 runtime.
 
 When using a Windows wheel, install the [Microsoft Visual C++ v14 Redistributable (x64)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/) for toolset 14.44 or later. It supplies `MSVCP140.dll`, `MSVCP140_ATOMIC_WAIT.dll`, `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll`. The package registers its own DLL directory during import, after pixtreme initializes its directory, so runtime use needs no compiler, CUDA toolkit or DLL directories added to `PATH`.
 
@@ -110,8 +108,11 @@ descriptor names and versions use `invalid-module-name` and
 The [public core Releases](https://github.com/sync-dev-org/pixtreme-transport/releases)
 provide a prebuilt SDK and `release.json`. The SDK contains the same shared
 library, headers and CMake configuration as the release wheel under
-`pixtreme/transport/{include,lib,cmake}`. Current SDKs support Linux x86_64 with
-glibc 2.28 or later. Neither core nor pixtreme is compiled when obtaining these
+`pixtreme/transport/{include,lib,cmake}` on Linux and
+`pixtreme/transport/{include,bin,lib,cmake}` on Windows. Linux SDKs support
+x86_64 with glibc 2.28 or later. Use the Windows procedure below only for a
+core Release with a `win_amd64` SDK asset and a shared recipe Release containing
+that version's Windows entry. Neither core nor pixtreme is compiled when obtaining these
 SDKs, and no Python wheel or C++ source checkout is needed.
 
 The core and pixtreme Conan recipes are maintained together in the private
@@ -207,6 +208,102 @@ Arrange runtime lookup for the chosen installation, for example with Conan's
 runtime environment during standalone development, and load one core library
 and one pixtreme library in each process. Module wheels retain relative
 `$ORIGIN` paths to their installed dependencies and do not copy those libraries.
+
+### Windows C and C++ consumers
+
+Use native Windows x86_64 with MSVC 194 (Visual Studio 2022 toolset 14.44),
+the Windows SDK, Python 3, Conan 2.34.0 and `gh`. Runtime machines need the
+Microsoft Visual C++ v14 Redistributable described above. The consumer uses
+the same `conanfile.py`, CMake package and `pixtreme::transport` target as Linux.
+No Python wheel, CUDA toolkit or CUDA compiler is needed for SDK acquisition
+or for compiling a consumer.
+
+Select a core version whose Release contains
+`pixtreme_transport-X.Y.Z-sdk-win_amd64.tar.gz` and
+`release-win_amd64.json`. Download the record and `SHA256SUMS` with `curl.exe`
+and verify the record before using its pixtreme version:
+
+```bat
+set "core_version=X.Y.Z"
+set "base=https://github.com/sync-dev-org/pixtreme-transport/releases/download/v%core_version%"
+curl.exe --fail --location --output release-win_amd64.json "%base%/release-win_amd64.json"
+if errorlevel 1 exit /b 1
+curl.exe --fail --location --output SHA256SUMS "%base%/SHA256SUMS"
+if errorlevel 1 exit /b 1
+python -c "import hashlib,pathlib; p=pathlib.Path('release-win_amd64.json'); expected=[line.split()[0] for line in pathlib.Path('SHA256SUMS').read_text().splitlines() if line.split()[-1]==p.name]; assert expected==[hashlib.sha256(p.read_bytes()).hexdigest()]"
+if errorlevel 1 exit /b 1
+python -c "import json; print(json.load(open('release-win_amd64.json'))['pixtreme_sdk_version'])"
+```
+
+Set `CONAN_HOME` to a writable consumer directory. Acquire and verify the
+shared recipe archive using the shared acquisition procedure linked above;
+export into this Windows Conan home. From the verified extraction directory,
+run these cmd commands, replacing `pixtreme_version` with the checked record's
+value:
+
+```bat
+set "CONAN_HOME=C:\path\to\consumer\deps\conan-home"
+set "pixtreme_version=X.Y.Z"
+conan export recipes\pixtreme --version=%pixtreme_version%
+if errorlevel 1 exit /b 1
+conan export recipes\pixtreme-transport --version=%core_version%
+if errorlevel 1 exit /b 1
+```
+
+In the consumer directory, create `windows-msvc194` with these settings:
+
+```ini
+[settings]
+os=Windows
+arch=x86_64
+compiler=msvc
+compiler.version=194
+compiler.runtime=dynamic
+compiler.runtime_type=Release
+compiler.cppstd=20
+build_type=Release
+[conf]
+tools.build:jobs=4
+tools.cmake.cmaketoolchain:generator=Ninja
+```
+
+Create `tools` to obtain CMake and Ninja through Conan:
+
+```ini
+[tool_requires]
+!(cmake/*|ninja/*): cmake/3.31.12, ninja/1.13.2
+```
+
+Add `VirtualBuildEnv` and `VirtualRunEnv` to the consumer's `generators`, next
+to `CMakeDeps` and `CMakeToolchain`. Run the following from the consumer
+directory in one cmd process. Keep the generated lock and use it for later
+installs. `--build=missing` packages the downloaded SDKs without compiling core
+or pixtreme:
+
+```bat
+conan lock create . -pr:h windows-msvc194 -pr:h tools -pr:b windows-msvc194 -pr:b tools --lockfile="" --lockfile-out=conan.lock
+if errorlevel 1 exit /b 1
+conan install . -pr:h windows-msvc194 -pr:h tools -pr:b windows-msvc194 -pr:b tools --lockfile=conan.lock --build=missing --output-folder=build
+if errorlevel 1 exit /b 1
+call build\conanbuild.bat
+if errorlevel 1 exit /b 1
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=build/conan_toolchain.cmake
+if errorlevel 1 exit /b 1
+cmake --build build --parallel 4
+if errorlevel 1 exit /b 1
+call build\conanrun.bat
+if errorlevel 1 exit /b 1
+build\example.exe
+```
+
+The SDK installs `bin/pixtreme_transport-9.dll` and
+`lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
+own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
+for this standalone example. A deployed application chooses its own DLL
+layout and search setup and keeps one core and one pixtreme per process.
+Call `pixtreme::transport::require_abi()` before other core operations, or
+`pixtreme_transport_require_abi(PIXTREME_TRANSPORT_ABI_VERSION, &error)` from C.
+The same CMake target propagates the pixtreme dependency to C and C++ consumers.
 
 ### Embed a source-built static core
 
