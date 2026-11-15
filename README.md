@@ -16,7 +16,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.25.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.25.3`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
