@@ -6,6 +6,8 @@ One core wheel includes the C++ shared library, public C headers and header-only
 
 ## Install
 
+The following commands install the Linux wheels currently published on PyPI.
+
 ```bash
 pip install pixtreme-transport
 ```
@@ -28,9 +30,13 @@ The testing package is included in the core wheel and shares its version. Ordina
 
 ## Supported environments
 
-PyPI wheels support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`), with separate wheels for CPython 3.12 and 3.13. Runtime use requires an NVIDIA GPU and an NVIDIA driver that supports the CUDA 13 runtime.
+The wheels currently published on PyPI support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`), with separate wheels for CPython 3.12 and 3.13. Runtime use requires an NVIDIA GPU and an NVIDIA driver that supports the CUDA 13 runtime.
 
-PyPI releases contain wheels only; no source distribution is uploaded. Installation on another operating system, CPU architecture or Python version fails with no matching distribution. The package does not provide a CPU-only runtime mode.
+The core also supports native Windows x86_64 (`win_amd64`). Windows wheels have not yet been published.
+
+When using a Windows wheel, install the [Microsoft Visual C++ v14 Redistributable (x64)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/) for toolset 14.44 or later. It supplies `MSVCP140.dll`, `MSVCP140_ATOMIC_WAIT.dll`, `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll`. The package registers its own DLL directory during import, after pixtreme initializes its directory, so runtime use needs no compiler, CUDA toolkit or DLL directories added to `PATH`.
+
+PyPI releases contain wheels only; no source distribution is uploaded. Installation from PyPI requires a published wheel for the selected operating system, CPU architecture and Python version; otherwise it fails with no matching distribution. The package does not provide a CPU-only runtime mode.
 
 ## Protocol and codec modules
 
@@ -38,11 +44,21 @@ Install only the module distributions needed by your application. Modules use di
 
 ## Create sessions by module name
 
-C and C++ programs can create an entrance or exit session from a module's name. `<pixtreme/transport/c/module.h>` declares `pixtreme_transport_module_create_entrance` and `pixtreme_transport_module_create_exit`. Each takes the module name (`[a-z][a-z0-9_]*`, the same `<module>` as the import name), a sized request record (the device and the caller's frame buffer, plus the core exit settings for an exit) and an array of name/value string settings. The core selects a registered builtin entry when its descriptor declares that name. For other names, the shared core opens only `<module>/lib/libpixtreme_transport_<module>_entry.so` under the installed `pixtreme/transport` directory, located from the core's own shared library, and calls its `pixtreme_transport_module_entry` function. Both routes check the descriptor version and the core ABI. A core statically embedded from a source build returns `module-not-found` for names absent from its builtin list, including when no list was registered. It does not search or load shared module libraries. The core does not scan directories or read environment variables. On success the call returns an unopened session; start it with the existing open operation.
+C and C++ programs can create an entrance or exit session from a module's name. `<pixtreme/transport/c/module.h>` declares `pixtreme_transport_module_create_entrance` and `pixtreme_transport_module_create_exit`. Each takes the module name (`[a-z][a-z0-9_]*`, the same `<module>` as the import name), a sized request record (the device and the caller's frame buffer, plus the core exit settings for an exit) and an array of name/value string settings. The core selects a registered builtin entry when its descriptor declares that name. For other names, the shared core opens only `<module>/lib/libpixtreme_transport_<module>_entry.so` on Linux or `<module>/bin/pixtreme_transport_<module>_entry.dll` on Windows under the installed `pixtreme/transport` directory, located from the core's own shared library, and calls its `pixtreme_transport_module_entry` function. Both routes check the descriptor version and the core ABI. A core statically embedded from a source build returns `module-not-found` for names absent from its builtin list, including when no list was registered. It does not search or load shared module libraries. The core does not scan directories or read environment variables. On success the call returns an unopened session; start it with the existing open operation.
 
-Failures carry stable reasons: `invalid-module-name`, `module-not-found` (its guidance names the distribution `pixtreme-transport-<module>` to install), `module-load-failed`, `module-entry-missing`, `module-abi-mismatch`, `module-direction-unavailable`, `invalid-module-option` and `module-create-failed`. Each call creates an independent instance that can be used on another thread; a loaded module library stays loaded until the process ends. Module discovery is implemented for Linux.
+Failures carry stable reasons: `invalid-module-name`, `module-not-found` (its guidance names the distribution `pixtreme-transport-<module>` to install), `module-load-failed`, `module-entry-missing`, `module-abi-mismatch`, `module-direction-unavailable`, `invalid-module-option` and `module-create-failed`. Each call creates an independent instance that can be used on another thread; a loaded module library stays loaded until the process ends. Module discovery is implemented for Linux and native Windows x86_64.
 
 Setting names use `.` for nesting, for example `connection.channel`. Values are text: decimal integers with an optional leading `-` (no `+`, spaces, `0x` or fractions), `true` or `false`, and rationals `<numerator>/<denominator>` with a positive denominator. Each module documents its keys. Errors name the key and never include its value. Module authors and C++ callers can use the header-only `<pixtreme/transport/module.h>`, which provides `pixtreme::transport::module::Options` for parsing and validating settings, `create_entrance` and `create_exit` returning an owning `Handle`, and `creation_boundary` for converting setting errors into the C error contract.
+
+Module authors declare their entry with `PIXTREME_TRANSPORT_MODULE_EXPORT`
+from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
+shared entry on Windows independently of the core's import declarations. When
+compiling an entry into an executable, define
+`PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
+Windows source builds install the core DLL `pixtreme_transport-9.dll` in `bin/`
+and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
+Applications supply the DLL search directories as described in their own
+runtime configuration; module discovery does not change global search paths.
 
 Applications that link modules into their executable pass their entry functions
 to `pixtreme_transport_module_register_builtin_entries(entries, count, &error)`
@@ -480,6 +496,10 @@ The SDK bundles the unchanged [DLPack v1.2 header](https://github.com/dmlc/dlpac
 `<pixtreme/transport/c/buffer.h>` provides caller-owned bounded frame buffers. Drop mode evicts the oldest waiting frame and returns an owning metadata record with its coordinate, input number and discontinuity flag; blocking mode waits for room without accepting early. Both modes preserve accepted frames after close so callers can drain them. Buffers own no thread and do not synchronize the GPU. An item retains its frame and optional snapshot owner, while a drop record retains no payload. `<pixtreme/transport/c/stop.h>` provides a shared stop state for consumer and prefill waits: stopping leaves queued input and the buffer's open state intact. The C++ wrappers `session::FrameBuffer` (also named `NativeFrameBuffer`), `StopSource` and `StopToken` are in `<pixtreme/transport/buffer/frame_buffer.h>` and `<pixtreme/transport/buffer/stop.h>`.
 
 The exit C API is in `<pixtreme/transport/c/exit.h>`. Modules register size-prefixed callback tables for target lifecycle, encode and send; core owns the worker threads, pacing, caller-buffer acquisition and completion tracking. Native frame transforms register `run`, serialization transforms register a non-consuming `prepare`, and native send clocks register both monotonic-time operations. All tables retain their optional context owner. Immutable settings and inspection handles expose audio policy and separate video/audio completion coordinates.
+
+For core-paced direct and encoded outputs, `ExitSettings.follow_input` enables gradual adjustment of send deadlines towards `target_buffer_wait_ms` (default 4 ms), bounded by `max_follow_step_ms` (default 0.1 ms per period). Following defaults to false; SDK-paced outputs retain their own pacing. The target is between zero and one frame period; the step is at least 1 ns and at most half a period. All values must be finite. Buffer residence ends when the sender selects a direct picture or the encoder selects a raw picture; encoding and the encoded queue do not enter the measurement. The first observation aligns startup phase once. Later fresh pictures adjust the next deadline; repeats provide no feedback and slow preparation does not accumulate error. Media timestamps and audio sample allocation keep the nominal frame period.
+
+The C fields have the same names in `pixtreme_transport_exit_settings_options`, with `follow_input` a `pixtreme_transport_bool` and both millisecond values `double`. Set `struct_size` and all three values when enabling following. Older, shorter records remain valid and default to disabled following. Pass the resulting settings handle in `pixtreme_transport_module_exit_request.settings` when creating a module by name; these core settings are separate from the module's string-valued options. The C++ wrapper and Python `pixtreme.transport.session.ExitSettings` expose the same fields. Inspection exposes `buffer_wait_ms` (optional in C++/Python; `has_buffer_wait` in C) and `pacing_correction_ms`. A repeat clears the fresh-picture observation. A pacing rebase after more than four periods of lateness clears the old correction without adding it twice. Custom `SendClock` implementations may use any origin, but following requires nanoseconds advancing at the same rate as core's monotonic source; core does not detect or guarantee following with another rate or unit.
 
 Encode and transform results carry owner references and opaque module contexts; serialization results use the existing typed C result handle. These references survive core GPU work and known encoder/SDK reads, including failures. A successful synchronous send reports both completions; asynchronous senders report video and audio separately using the ticket. Cancellation first stops admission and records a fatal failure, then requires the module's explicit proof that all admitted external reads and callbacks have ended. A stop request or failure alone is no such proof. Close finishes core workers, joins module reads and callbacks, finishes GPU work and returns retained loans before closing the target. It leaves the caller's buffer open. Derived C++ modules keep the same hook interface through the header-only `session::Exit`, `FrameTransform`, `SerializationTransform` and `SendClock` bases.
 
