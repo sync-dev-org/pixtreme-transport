@@ -53,7 +53,7 @@ from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
 compiling an entry into an executable, define
 `PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
-Windows source builds install the core DLL `pixtreme_transport-9.dll` in `bin/`
+Windows source builds install the core DLL `pixtreme_transport-10.dll` in `bin/`
 and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
 Applications supply the DLL search directories as described in their own
 runtime configuration; module discovery does not change global search paths.
@@ -250,7 +250,10 @@ conan export recipes\pixtreme-transport --version=%core_version%
 if errorlevel 1 exit /b 1
 ```
 
-In the consumer directory, create `windows-msvc194` with these settings:
+In the consumer directory, create `windows-msvc194` with these settings.
+Replace `<parallel-jobs>` in the profile and commands with a job count chosen
+from the host's CPU configuration and the shared resource allocation received
+through `nf resource`:
 
 ```ini
 [settings]
@@ -263,7 +266,7 @@ compiler.runtime_type=Release
 compiler.cppstd=20
 build_type=Release
 [conf]
-tools.build:jobs=4
+tools.build:jobs=<parallel-jobs>
 tools.cmake.cmaketoolchain:generator=Ninja
 ```
 
@@ -289,14 +292,14 @@ call build\conanbuild.bat
 if errorlevel 1 exit /b 1
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=build/conan_toolchain.cmake
 if errorlevel 1 exit /b 1
-cmake --build build --parallel 4
+cmake --build build --parallel <parallel-jobs>
 if errorlevel 1 exit /b 1
 call build\conanrun.bat
 if errorlevel 1 exit /b 1
 build\example.exe
 ```
 
-The SDK installs `bin/pixtreme_transport-9.dll` and
+The SDK installs `bin/pixtreme_transport-10.dll` and
 `lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
 own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
 for this standalone example. A deployed application chooses its own DLL
@@ -350,7 +353,9 @@ link the core's C++ implementation. Do not add archive paths, CUDA roots or
 individual dependency libraries to the consumer.
 
 Detect the native compiler profile and create `static-profile` to select
-C++20, at most four build jobs and your installed CMake and Ninja:
+C++20 and your installed CMake and Ninja. Replace `<parallel-jobs>` in the
+profile and build command with a job count chosen from the host's CPU
+configuration and the shared resource allocation received through `nf resource`:
 
 ```bash
 conan profile detect --exist-ok
@@ -361,7 +366,7 @@ include(default)
 compiler.cppstd=20
 
 [conf]
-tools.build:jobs=4
+tools.build:jobs=<parallel-jobs>
 tools.cmake.cmaketoolchain:generator=Ninja
 
 [replace_tool_requires]
@@ -427,7 +432,7 @@ PY
 )
 cmake -S . -B build-static -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE=build-static/conan_toolchain.cmake
-cmake --build build-static --parallel 4
+cmake --build build-static --parallel <parallel-jobs>
 ```
 
 The exit trap removes credentials immediately after install, including on
@@ -458,6 +463,9 @@ the list and the `module-not-found` result for names absent from it.
 Provide Python 3.12 or later, a C++20 compiler, GitHub CLI authentication for the
 shared recipes, and the pinned Conan CLI. CMake and Ninja come from Conan's
 `cpp/conan/profiles/tools`; do not install them on the host or through pip.
+Replace `<parallel-jobs>` in the commands below with a job count chosen from
+the host's CPU configuration and the shared resource allocation received
+through `nf resource`.
 
 ```bash
 uv tool install 'conan==2.34.0'
@@ -467,7 +475,7 @@ uv pip install --no-deps --reinstall-package pixtreme-transport .
 cd ..
 python3 cpp/conan/prepare-tests.py
 cd python
-uv run --no-sync pytest
+uv run --no-sync pytest -n <parallel-jobs> --dist=worksteal
 uv run --no-sync ruff check
 uv run --no-sync ruff format --check
 uv run --no-sync mypy
@@ -477,6 +485,13 @@ The parent `pixtreme` package belongs to its dependency wheel. Development uses
 an installed core wheel. After `uv sync` or any source change, repeat both the
 `uv sync --no-install-project` and `uv pip install` commands above.
 
+The default pytest selection excludes `slow` distribution build/install tests
+and `performance` tests. Run the slow tests with
+`uv run --no-sync pytest -n <parallel-jobs> --dist=worksteal -m slow`.
+Run affected slow tests when changing distribution builds or packaging, and
+include them in integration checks after build, packaging or dependency changes
+and before a release. Performance tests remain opt-in with `-m performance`.
+
 For a standalone C++ build, start at the repository root:
 
 ```bash
@@ -485,16 +500,17 @@ python3 cpp/conan/prepare.py --output build/cpp-build
 preset=$(python3 -c 'import json; print(json.load(open("build/cpp-build/CMakePresets.json"))["configurePresets"][0]["name"])')
 cd cpp
 cmake --preset "$preset"
-cmake --build --preset "$preset" --parallel 2
+cmake --build --preset "$preset" --parallel <parallel-jobs>
 ```
 
 For C++ tests, run `python3 cpp/conan/prepare-tests.py`, then prepare a separate
 output with `python3 cpp/conan/prepare.py --output build/cpp-tests --tests --offline`.
 Activate that output's `conanbuild.sh`, read its preset name as above, and configure
 with `cmake --preset "$preset" -DTRANSPORT_BUILD_TESTS=ON`. Build with
-`cmake --build --preset "$preset"`, and run `CUDA_VISIBLE_DEVICES="" ctest --preset "$preset" --output-on-failure`.
+`cmake --build --preset "$preset" --parallel <parallel-jobs>`, and run
+`CUDA_VISIBLE_DEVICES="" ctest --preset "$preset" --output-on-failure --parallel <parallel-jobs>`.
 
-For Windows source builds, create the checkout with `git clone --config core.autocrlf=false <repository-url>` to preserve the license file bytes.
+For Windows source builds, create the checkout with `git clone --config core.autocrlf=false --config core.symlinks=true <repository-url>`. This preserves the license file bytes and keeps `python/LICENSE` and `python/README.md` as symbolic links to the root `LICENSE` and `README.md`, which the wheel ships as its license and description. Creating symbolic links on Windows needs permission to do so (for example, Developer Mode). Before building, check that `python/LICENSE` is a symbolic link; a plain file containing `../LICENSE` produces a wheel with the wrong license text.
 
 On Windows use cmd, run `python cpp\conan\prepare.py --output build\cpp-build`,
 then `call build\cpp-build\conanbuild.bat` in that same cmd process. Change to
