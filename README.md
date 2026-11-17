@@ -53,7 +53,7 @@ from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
 compiling an entry into an executable, define
 `PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
-Windows source builds install the core DLL `pixtreme_transport-10.dll` in `bin/`
+Windows source builds install the core DLL `pixtreme_transport-11.dll` in `bin/`
 and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
 Applications supply the DLL search directories as described in their own
 runtime configuration; module discovery does not change global search paths.
@@ -299,7 +299,7 @@ if errorlevel 1 exit /b 1
 build\example.exe
 ```
 
-The SDK installs `bin/pixtreme_transport-10.dll` and
+The SDK installs `bin/pixtreme_transport-11.dll` and
 `lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
 own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
 for this standalone example. A deployed application chooses its own DLL
