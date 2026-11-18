@@ -53,7 +53,7 @@ from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
 compiling an entry into an executable, define
 `PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
-Windows source builds install the core DLL `pixtreme_transport-11.dll` in `bin/`
+Windows source builds install the core DLL `pixtreme_transport-12.dll` in `bin/`
 and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
 Applications supply the DLL search directories as described in their own
 runtime configuration; module discovery does not change global search paths.
@@ -299,7 +299,7 @@ if errorlevel 1 exit /b 1
 build\example.exe
 ```
 
-The SDK installs `bin/pixtreme_transport-11.dll` and
+The SDK installs `bin/pixtreme_transport-12.dll` and
 `lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
 own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
 for this standalone example. A deployed application chooses its own DLL
@@ -608,9 +608,11 @@ The SDK bundles the unchanged [DLPack v1.2 header](https://github.com/dmlc/dlpac
 
 `<pixtreme/transport/c/buffer.h>` provides caller-owned bounded frame buffers. Drop mode evicts the oldest waiting frame and returns an owning metadata record with its coordinate, input number and discontinuity flag; blocking mode waits for room without accepting early. Both modes preserve accepted frames after close so callers can drain them. Buffers own no thread and do not synchronize the GPU. An item retains its frame and optional snapshot owner, while a drop record retains no payload. `<pixtreme/transport/c/stop.h>` provides a shared stop state for consumer and prefill waits: stopping leaves queued input and the buffer's open state intact. The C++ wrappers `session::FrameBuffer` (also named `NativeFrameBuffer`), `StopSource` and `StopToken` are in `<pixtreme/transport/buffer/frame_buffer.h>` and `<pixtreme/transport/buffer/stop.h>`.
 
-The exit C API is in `<pixtreme/transport/c/exit.h>`. Modules register size-prefixed callback tables for target lifecycle, encode and send; core owns the worker threads, pacing, caller-buffer acquisition and completion tracking. Native frame transforms register `run`, serialization transforms register a non-consuming `prepare`, and native send clocks register both monotonic-time operations. All tables retain their optional context owner. Immutable settings and inspection handles expose audio policy and separate video/audio completion coordinates.
+The sending thread selects one FIFO picture for each output period, performs serialization and codec encoding, then sends it. It prepares no future picture or repeat ahead of that period.
 
-For core-paced direct and encoded outputs, `ExitSettings.follow_input` enables gradual adjustment of send deadlines towards `target_buffer_wait_ms` (default 4 ms), bounded by `max_follow_step_ms` (default 0.1 ms per period). Following defaults to false; SDK-paced outputs retain their own pacing. The target is between zero and one frame period; the step is at least 1 ns and at most half a period. All values must be finite. Buffer residence ends when the sender selects a direct picture or the encoder selects a raw picture; encoding and the encoded queue do not enter the measurement. The first observation aligns startup phase once. Later fresh pictures adjust the next deadline; repeats provide no feedback and slow preparation does not accumulate error. Media timestamps and audio sample allocation keep the nominal frame period.
+The exit C API is in `<pixtreme/transport/c/exit.h>`. Modules register size-prefixed callback tables for target lifecycle, encode and send; core owns one sending thread, pacing, caller-buffer acquisition and completion tracking. Native frame transforms register `run`, serialization transforms register a non-consuming `prepare`, and native send clocks register both monotonic-time operations. All tables retain their optional context owner. Immutable settings and inspection handles expose audio policy and separate video/audio completion coordinates.
+
+For core-paced outputs, `ExitSettings.follow_input` enables gradual adjustment of send deadlines towards `target_buffer_wait_ms` (default 4 ms), bounded by `max_follow_step_ms` (default 0.1 ms per period). Following defaults to false; SDK-paced outputs retain their own pacing. The target is between zero and one frame period; the step is at least 1 ns and at most half a period. All values must be finite. Buffer residence ends when the sending thread selects a picture, before serialization and codec encoding. The first observation aligns startup phase once. Later fresh pictures adjust the next deadline; repeats provide no feedback and slow preparation does not accumulate error. Media timestamps and audio sample allocation keep the nominal frame period.
 
 The C fields have the same names in `pixtreme_transport_exit_settings_options`, with `follow_input` a `pixtreme_transport_bool` and both millisecond values `double`. Set `struct_size` and all three values when enabling following. Older, shorter records remain valid and default to disabled following. Pass the resulting settings handle in `pixtreme_transport_module_exit_request.settings` when creating a module by name; these core settings are separate from the module's string-valued options. The C++ wrapper and Python `pixtreme.transport.session.ExitSettings` expose the same fields. Inspection exposes `buffer_wait_ms` (optional in C++/Python; `has_buffer_wait` in C) and `pacing_correction_ms`. A repeat clears the fresh-picture observation. A pacing rebase after more than four periods of lateness clears the old correction without adding it twice. Custom `SendClock` implementations may use any origin, but following requires nanoseconds advancing at the same rate as core's monotonic source; core does not detect or guarantee following with another rate or unit.
 
