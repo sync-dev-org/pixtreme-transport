@@ -53,7 +53,7 @@ from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
 compiling an entry into an executable, define
 `PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
-Windows source builds install the core DLL `pixtreme_transport-12.dll` in `bin/`
+Windows source builds install the core DLL `pixtreme_transport-13.dll` in `bin/`
 and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
 Applications supply the DLL search directories as described in their own
 runtime configuration; module discovery does not change global search paths.
@@ -299,7 +299,7 @@ if errorlevel 1 exit /b 1
 build\example.exe
 ```
 
-The SDK installs `bin/pixtreme_transport-12.dll` and
+The SDK installs `bin/pixtreme_transport-13.dll` and
 `lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
 own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
 for this standalone example. A deployed application chooses its own DLL
@@ -582,7 +582,7 @@ int main(void) {
 }
 ```
 
-The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. Native ABI 6 starts the C compatibility set. Modules built for native ABI 5 must be rebuilt once for this set; the former SONAME and C++ symbols are unavailable.
+The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 13. Build C and C++ consumers and modules with ABI-13 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 12 from core 0.38.0. Windows consumers load `pixtreme_transport-13.dll`.
 
 Every extensible C record begins with `struct_size`. Set it to the accessible byte capacity, normally `sizeof(record)`, and pass the record by pointer. Each operation documents its mandatory input prefix and the defaults for omitted trailing fields. Output operations write only complete fields that fit, preserve the capacity, and leave unknown trailing bytes untouched. Status, category and boolean values use fixed-width integer storage. The common C header defines these rules and the immutable string view.
 
@@ -590,7 +590,9 @@ Error outputs belong to each call. Release a previous error before reusing its o
 
 An owner holds a caller's context and release callback. Successful construction transfers one context reference; failed construction leaves it with the caller. Handle copies retain the context, and the last release invokes the callback once on the releasing thread. The caller supplies any synchronization the callback needs. `<pixtreme/transport/owner.h>` provides the header-only `pixtreme::transport::Owner` wrapper; `Handle` supplies shared reference management. Callers that need to inspect a cleanup failure can detach a handle and explicitly release it with an error output; C++ destructors discard cleanup failures.
 
-The GPU C API is in `<pixtreme/transport/c/gpu.h>`. Arrays retain a DLPack `DLTensor` description and an owner handle; creation copies descriptors, not GPU pixels. Image descriptions and typed side data are immutable handles. Frame construction shares already owned arrays; capture copies reusable source arrays into core-owned device memory. Replacement preserves timing and omitted values, shares replacement allocations, and distinguishes omitted PCM from explicitly cleared PCM.
+The GPU C API is in `<pixtreme/transport/c/gpu.h>`. Arrays retain a DLPack `DLTensor` description and an owner handle; creation copies descriptors, not GPU pixels. Image descriptions and typed side data are immutable handles. Frame construction shares already owned arrays; capture copies reusable source arrays into core-owned device memory. Replacement preserves timing and omitted values, shares replacement allocations, and distinguishes omitted PCM from explicitly cleared PCM. Within timing, only an explicitly selected `received_at_ns` changes during replacement.
+
+`FrameTiming.received_at_ns` is optional signed 64-bit nanoseconds recording when an input module received the picture's access unit or capture frame. The input observes it once with C's `pixtreme_transport_now_ns`, C++'s `pixtreme::transport::now_ns()` or Python's `pixtreme.transport.values.now_ns()`. These operations read the same monotonic source as core sender pacing. Synthetic pictures and inputs without a receipt observation leave it absent. This value is separate from the input-number triple, media time and audio positions. Frame copies, capture, replacement, caller buffers and C/Python transfer preserve it. Python `frame.replace(received_at_ns=value)` sets it, `received_at_ns=None` clears it, and omission preserves it. C uses `PIXTREME_TRANSPORT_REPLACE_RECEIVED_AT_NS`; C++ uses the final optional replacement argument, whose outer optional selects replacement and whose inner optional carries or clears the value. The C timing descriptor and inspection record append a `const int64_t* received_at_ns`: NULL means absent, creation copies the value, and inspection borrows it until timing's final release. Older `struct_size` prefixes remain valid, including output records; zero is a present value.
 
 The entrance C API is in `<pixtreme/transport/c/entrance.h>`. Surface handles copy explicit source geometry and colour observations and retain allocation owners and producer readiness. Colour resolution exposes observed codes, resolved names and the axes that used defaults separately. A surface loan retains its return callback context and processing stream owner until the last source read finishes; `try_release` never waits on the host. Conversion returns the existing GPU frame handle with independent core-owned float32 Y/Cb/Cr pixels and a colour resolution handle. The protocol module returns its source loan separately from later frame consumers. The C++ entrance types wrap these C operations in their headers.
 
@@ -608,16 +610,114 @@ The SDK bundles the unchanged [DLPack v1.2 header](https://github.com/dmlc/dlpac
 
 `<pixtreme/transport/c/buffer.h>` provides caller-owned bounded frame buffers. Drop mode evicts the oldest waiting frame and returns an owning metadata record with its coordinate, input number and discontinuity flag; blocking mode waits for room without accepting early. Both modes preserve accepted frames after close so callers can drain them. Buffers own no thread and do not synchronize the GPU. An item retains its frame and optional snapshot owner, while a drop record retains no payload. `<pixtreme/transport/c/stop.h>` provides a shared stop state for consumer and prefill waits: stopping leaves queued input and the buffer's open state intact. The C++ wrappers `session::FrameBuffer` (also named `NativeFrameBuffer`), `StopSource` and `StopToken` are in `<pixtreme/transport/buffer/frame_buffer.h>` and `<pixtreme/transport/buffer/stop.h>`.
 
-The sending thread selects one FIFO picture for each output period, performs serialization and codec encoding, then sends it. It prepares no future picture or repeat ahead of that period.
+Both buffer modes also offer `try_select(classify)` in C++ and Python (`pixtreme_transport_frame_buffer_try_select` in C). The caller supplies the schedule: the classifier returns `expired`, `current` or `future` for each borrowed candidate. Input must have an ordered expired prefix followed by a current or future picture. Under the same storage lock, the operation removes that prefix, transfers at most one current picture and leaves future pictures queued. It does not inspect past the first current or future picture. Callbacks must not reenter or wait on the buffer, process pixels or synchronize the GPU. A failed classifier or return preparation leaves queued frames and counters unchanged.
+
+Selection returns the selected optional frame and an immutable metadata record for each expired frame; it releases each expired picture together with its side data, ancillary data, audio and snapshot. Overflow and expiry records both expose `reason` (`overflow` or `expired`) and `removed_at_ns` from the buffer's monotonic clock, alongside the coordinate, input number and discontinuity flag. `dropped_count` continues to count overflow only; `expired_count` counts explicit selection expiry. The caller collects returned records; the buffer retains no unbounded history. C records use `struct_size`, so older callers can still read their existing fields. The native C++ selection result owns the immutable C record list; indexing, iteration or `expired.values()` creates independent record values and can be retried after a failed read. Python allocates its result object before selecting; reading its `frame` or `expired` properties creates values without consuming that result. Python `FrameBuffer(depth, mode="drop")` also accepts `mode="blocking"`; its selection result exposes `frame` and `expired`.
+
+The sending thread selects one picture according to its selection mode for each output period, performs serialization and codec encoding, then sends it. It prepares no future picture or repeat ahead of that period.
 
 The exit C API is in `<pixtreme/transport/c/exit.h>`. Modules register size-prefixed callback tables for target lifecycle, encode and send; core owns one sending thread, pacing, caller-buffer acquisition and completion tracking. Native frame transforms register `run`, serialization transforms register a non-consuming `prepare`, and native send clocks register both monotonic-time operations. All tables retain their optional context owner. Immutable settings and inspection handles expose audio policy and separate video/audio completion coordinates.
 
-For core-paced outputs, `ExitSettings.follow_input` enables gradual adjustment of send deadlines towards `target_buffer_wait_ms` (default 4 ms), bounded by `max_follow_step_ms` (default 0.1 ms per period). Following defaults to false; SDK-paced outputs retain their own pacing. The target is between zero and one frame period; the step is at least 1 ns and at most half a period. All values must be finite. Buffer residence ends when the sending thread selects a picture, before serialization and codec encoding. The first observation aligns startup phase once. Later fresh pictures adjust the next deadline; repeats provide no feedback and slow preparation does not accumulate error. Media timestamps and audio sample allocation keep the nominal frame period.
-
-The C fields have the same names in `pixtreme_transport_exit_settings_options`, with `follow_input` a `pixtreme_transport_bool` and both millisecond values `double`. Set `struct_size` and all three values when enabling following. Older, shorter records remain valid and default to disabled following. Pass the resulting settings handle in `pixtreme_transport_module_exit_request.settings` when creating a module by name; these core settings are separate from the module's string-valued options. The C++ wrapper and Python `pixtreme.transport.session.ExitSettings` expose the same fields. Inspection exposes `buffer_wait_ms` (optional in C++/Python; `has_buffer_wait` in C) and `pacing_correction_ms`. A repeat clears the fresh-picture observation. A pacing rebase after more than four periods of lateness clears the old correction without adding it twice. Custom `SendClock` implementations may use any origin, but following requires nanoseconds advancing at the same rate as core's monotonic source; core does not detect or guarantee following with another rate or unit.
-
 Encode and transform results carry owner references and opaque module contexts; serialization results use the existing typed C result handle. These references survive core GPU work and known encoder/SDK reads, including failures. A successful synchronous send reports both completions; asynchronous senders report video and audio separately using the ticket. Cancellation first stops admission and records a fatal failure, then requires the module's explicit proof that all admitted external reads and callbacks have ended. A stop request or failure alone is no such proof. Close finishes core workers, joins module reads and callbacks, finishes GPU work and returns retained loans before closing the target. It leaves the caller's buffer open. Derived C++ modules keep the same hook interface through the header-only `session::Exit`, `FrameTransform`, `SerializationTransform` and `SendClock` bases.
 
+### Select pictures at the output
+
+`ExitSettings.frame_selection` selects how the sending thread obtains the current
+picture from the caller's buffer. `FrameSelectionMode.FIFO` is the default and
+takes pictures in queue order. It works with either `Pacing.CORE_CLOCK` or
+`Pacing.SDK_CLOCK`; `prefill_frames` controls its initial wait for queued pictures.
+`FrameSelectionMode.RECEIPT_SCHEDULE` uses input receipt times and requires
+`Pacing.CORE_CLOCK` and `prefill_frames=1`. An SDK-paced output or another prefill
+count rejects receipt scheduling as a configuration error (`ValueError` in Python).
+
+C++ uses `session::FrameSelectionMode::fifo` and
+`session::FrameSelectionMode::receipt_schedule`. C uses
+`PIXTREME_TRANSPORT_FRAME_SELECTION_FIFO` and
+`PIXTREME_TRANSPORT_FRAME_SELECTION_RECEIPT_SCHEDULE` in
+`pixtreme_transport_exit_settings_options.frame_selection`; the same options
+record also carries `max_phase_step_ms`.
+
+For receipt scheduling, choose the caller's buffer capacity N and nominal frame
+period T. N counts waiting pictures and excludes the retained picture used for
+repeats. The scheduling delay is D = N × T: a two-picture buffer at 25 fps gives
+D = 80 ms. For the first picture's input number k0 and receipt time r0, picture k
+is selected at `r0 + D + (k - k0) * T + phase_correction`. Use consistent time
+units in this formula; `received_at_ns` stores nanoseconds. Selection starts the
+current picture's serialization and encoding immediately. D ends at selection;
+the SDK receives the picture after encoding finishes.
+
+```python
+from fractions import Fraction
+from pixtreme.transport.session import ExitSettings, FrameBuffer, FrameSelectionMode, Pacing
+
+post_buffer = FrameBuffer(2)
+settings = ExitSettings(Fraction(1, 25))
+settings.pacing = Pacing.CORE_CLOCK
+settings.frame_selection = FrameSelectionMode.RECEIPT_SCHEDULE
+settings.prefill_frames = 1
+settings.max_phase_step_ms = 0.1
+# Pass post_buffer and settings to the output module's public factory.
+```
+
+The input module stamps each picture with `FrameTiming.received_at_ns`, as
+described above. Preserve that value through processing and buffer handoff.
+A receipt-scheduled output reports fatal `receipt-time-unavailable` for a picture
+without that observation, before accepting or sending it. Synthetic pictures
+without receipt observations can use FIFO.
+
+Receipt phase feedback observes the difference between actual receipt time and
+the grid's expected receipt time. It follows clock drift using at most
+`max_phase_step_ms` per output period; the current provisional default is 0.1 ms,
+pending receiver measurements. Processing completion, buffer admission and audio
+waiting do not feed this correction. Missing input and sender lateness do not
+accumulate feedback. `Exit.inspection` exposes `frame_selection`, `schedule_scope`,
+`phase_correction_ms` and optional `receipt_error_ms`. The last value is the latest
+actual receipt minus the grid's expected receipt, including its current phase;
+it stays unchanged on repeats.
+
+The sender expires pictures that missed their selection slots, selects one for
+the current slot and leaves future pictures queued. A slot without a picture
+repeats the last picture with silence. Expiry removes the picture's audio and
+side data together and advances neither accepted-frame counts nor completion
+coordinates. Output media time and audio sample counts follow the nominal period.
+The sender catches up while at most four periods late. Beyond four periods it
+closes missed slots and resumes at the next future slot, preserving the grid
+origin, D and phase. Input restart, number-scope changes and period changes start
+a new grid at the new range's first receipt and reset phase feedback. Old-range
+pictures retain their old slots until the new grid starts; remaining old pictures
+then expire.
+
+Call `Exit.take_drops()` to drain the sender's expiry records into immutable
+`FrameDropRecords` (`pixtreme_transport_exit_take_drops` in C). Each record exposes
+`reason`, `removed_at_ns`, `coordinate`, `input_number` and `discontinuity`.
+Sender expiry has reason `expired`; buffer overflow has reason `overflow` and is
+reported by the buffer's put result. `dropped_count` counts overflow and
+`expired_count` counts expiry. Neither record retains the picture payload.
+Indexing or `values()` can be retried on the returned immutable records; a later
+`take_drops()` drains only newly accumulated sender records.
+
+### Update output consumers
+
+Use the following settings when moving output consumers to native ABI 13:
+
+| Removed setting | Current configuration |
+| --- | --- |
+| `follow_input` | Select `frame_selection`: `FIFO` for queue order, or `RECEIPT_SCHEDULE` for a receipt grid on a core-paced output. |
+| `target_buffer_wait_ms` | Choose buffer capacity N; receipt scheduling derives D = N × T from capacity and the nominal period. |
+| `max_follow_step_ms` | Set `max_phase_step_ms`, the maximum receipt-phase change per period. |
+
+Read `phase_correction_ms` and `receipt_error_ms` for receipt-grid observations.
+The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fields
+have no field aliases. Rebuild native consumers and modules with ABI-13 headers,
+then use `require_abi()` before other operations.
+
+The installed conformance suite has `CONFORMANCE_REVISION == 17`, exported by
+`pixtreme.transport`. Consumers check their expected revision during collection.
+`ExitConformance` adds the `frame-selection` and `receipt-time` scenes to check
+settings acceptance, configuration errors and fatal receipt-time absence.
+An adapter declares unsupported output clocks through the existing `core-clock`
+and `sdk-clock` scene exclusions in `ConformanceCapabilities`; undeclared scenes
+run. These checks use the existing factory and failure-observation controls.
 
 ## Record session boundaries
 
