@@ -711,8 +711,13 @@ The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fie
 have no field aliases. Rebuild native consumers and modules with ABI-13 headers,
 then use `require_abi()` before other operations.
 
-The installed conformance suite has `CONFORMANCE_REVISION == 17`, exported by
+The installed conformance suite has `CONFORMANCE_REVISION == 18`, exported by
 `pixtreme.transport`. Consumers check their expected revision during collection.
+`EntranceConformance` preserves decoder scalar metadata from the source fixture.
+Every decoded picture includes `codec`; `faulty_reference` is present only when
+the decoder supplies it. The suite checks its exact boolean type and value when
+present and rejects adding or dropping the key relative to the fixture.
+The `slice_type` and `nal_unit_type` fields remain paired when supplied.
 `ExitConformance` adds the `frame-selection` and `receipt-time` scenes to check
 settings acceptance, configuration errors and fatal receipt-time absence.
 An adapter declares unsupported output clocks through the existing `core-clock`
