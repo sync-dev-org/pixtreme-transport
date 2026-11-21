@@ -53,7 +53,7 @@ from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
 compiling an entry into an executable, define
 `PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
-Windows source builds install the core DLL `pixtreme_transport-13.dll` in `bin/`
+Windows source builds install the core DLL `pixtreme_transport-14.dll` in `bin/`
 and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
 Applications supply the DLL search directories as described in their own
 runtime configuration; module discovery does not change global search paths.
@@ -299,7 +299,7 @@ if errorlevel 1 exit /b 1
 build\example.exe
 ```
 
-The SDK installs `bin/pixtreme_transport-13.dll` and
+The SDK installs `bin/pixtreme_transport-14.dll` and
 `lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
 own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
 for this standalone example. A deployed application chooses its own DLL
@@ -582,7 +582,7 @@ int main(void) {
 }
 ```
 
-The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 13. Build C and C++ consumers and modules with ABI-13 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 12 from core 0.38.0. Windows consumers load `pixtreme_transport-13.dll`.
+The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 14. Build C and C++ consumers and modules with ABI-14 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 13 from core 0.40.4. Windows consumers load `pixtreme_transport-14.dll`.
 
 Every extensible C record begins with `struct_size`. Set it to the accessible byte capacity, normally `sizeof(record)`, and pass the record by pointer. Each operation documents its mandatory input prefix and the defaults for omitted trailing fields. Output operations write only complete fields that fit, preserve the capacity, and leave unknown trailing bytes untouched. Status, category and boolean values use fixed-width integer storage. The common C header defines these rules and the immutable string view.
 
@@ -597,6 +597,24 @@ The GPU C API is in `<pixtreme/transport/c/gpu.h>`. Arrays retain a DLPack `DLTe
 The entrance C API is in `<pixtreme/transport/c/entrance.h>`. Surface handles copy explicit source geometry and colour observations and retain allocation owners and producer readiness. Colour resolution exposes observed codes, resolved names and the axes that used defaults separately. A surface loan retains its return callback context and processing stream owner until the last source read finishes; `try_release` never waits on the host. Conversion returns the existing GPU frame handle with independent core-owned float32 Y/Cb/Cr pixels and a colour resolution handle. The protocol module returns its source loan separately from later frame consumers. The C++ entrance types wrap these C operations in their headers.
 
 The input-session C API is in `<pixtreme/transport/c/session_entrance.h>`. A sized callback table registers source open/start/receive/stop/close hooks and a retained context owner. Core owns the reception thread, producer serialization, audio slicing and shutdown. Modules publish GPU frames and PCM through C operations into the caller's drop buffer. Immutable stream-info and snapshot handles carry numbering, PCM and colour observations with each returned frame. C stop registrations let native module waits observe the same stop state as buffer waits. The C++ `session::Entrance` base builds the table in its header; its constructor taking a C buffer handle depends only on C symbols. Pass `buffer.native_handle()` from the C++ `session::FrameBuffer` wrapper. The session retains the caller's C buffer; its lifetime is independent of that wrapper object.
+
+`open_source` prepares reception and returns without waiting for a sender. It
+returns no stream information. A thread source returns `StreamInfo` with its
+first picture through `receive(stop, info)`; an SDK callback source supplies it
+to its first `publish(frame, info)`. Missing information or missing numbering on
+that picture is fatal with reason `input-number-unavailable`. `snapshot()` is
+empty after each open until `next()` successfully returns a picture. Publication,
+call cancellation and failed return preparation leave it empty.
+
+An input module retains PCM received before its first picture. After that
+picture initializes the core's PCM store, a thread source submits the retained
+PCM at the start of the next `receive`, before handling stop or waiting for more
+video. An SDK callback source submits it immediately after the first `publish`.
+Use `push_pcm` with source-derived sample positions; the first picture's audio
+reference can then resolve those samples. The core refuses PCM before that first
+stream observation. Subsequent cadence/audio reanchors use the existing
+`reanchor_audio` and `reanchor_audio_at` operations.
+
 
 Readiness records producer completion and queues repeatable waits on consumer CUDA streams without a host wait. Queue reads after a wait, and retain caller-owned streams and contexts until those reads have retired. An array exported from a frame also retains that frame's completion. DLPack 1.x export accepts both a writer stream and a consumer stream, includes external writes ordered on the writer stream, and keeps descriptors and pixels alive until its deleter with no stream argument is called. Queue consumer reads before calling that deleter; the core records their completion and retires owners without synchronizing the host. Import transfers a managed tensor only on success, accepts byte offsets and scalar byte-aligned contiguous CUDA arrays, and rejects unsupported versions, flags and layouts without calling the producer's deleter.
 
@@ -698,7 +716,7 @@ Indexing or `values()` can be retried on the returned immutable records; a later
 
 ### Update output consumers
 
-Use the following settings when moving output consumers to native ABI 13:
+Use the following settings when moving output consumers to native ABI 14:
 
 | Removed setting | Current configuration |
 | --- | --- |
@@ -708,12 +726,15 @@ Use the following settings when moving output consumers to native ABI 13:
 
 Read `phase_correction_ms` and `receipt_error_ms` for receipt-grid observations.
 The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fields
-have no field aliases. Rebuild native consumers and modules with ABI-13 headers,
+have no field aliases. Rebuild native consumers and modules with ABI-14 headers,
 then use `require_abi()` before other operations.
 
-The installed conformance suite has `CONFORMANCE_REVISION == 18`, exported by
+The installed conformance suite has `CONFORMANCE_REVISION == 19`, exported by
 `pixtreme.transport`. Consumers check their expected revision during collection.
-`EntranceConformance` preserves decoder scalar metadata from the source fixture.
+`EntranceConformance` checks opening without a first picture, stopping its wait,
+absent snapshots until successful delivery, and fatal missing stream observations
+or numbering on the first picture. It also preserves decoder scalar metadata
+from the source fixture.
 Every decoded picture includes `codec`; `faulty_reference` is present only when
 the decoder supplies it. The suite checks its exact boolean type and value when
 present and rejects adding or dropping the key relative to the fixture.
