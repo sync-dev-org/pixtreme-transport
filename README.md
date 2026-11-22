@@ -673,7 +673,7 @@ settings = ExitSettings(Fraction(1, 25))
 settings.pacing = Pacing.CORE_CLOCK
 settings.frame_selection = FrameSelectionMode.RECEIPT_SCHEDULE
 settings.prefill_frames = 1
-settings.max_phase_step_ms = 0.1
+settings.max_phase_step_ms = 5.0
 # Pass post_buffer and settings to the output module's public factory.
 ```
 
@@ -685,13 +685,16 @@ without receipt observations can use FIFO.
 
 Receipt phase feedback observes the difference between actual receipt time and
 the grid's expected receipt time. It follows clock drift using at most
-`max_phase_step_ms` per output period; the current provisional default is 0.1 ms,
+`max_phase_step_ms` per output period; the current provisional default is 5 ms,
 pending receiver measurements. Processing completion, buffer admission and audio
 waiting do not feed this correction. Missing input and sender lateness do not
 accumulate feedback. `Exit.inspection` exposes `frame_selection`, `schedule_scope`,
 `phase_correction_ms` and optional `receipt_error_ms`. The last value is the latest
 actual receipt minus the grid's expected receipt, including its current phase;
-it stays unchanged on repeats.
+it stays unchanged until another receipt is observed. New receipts can correct
+phase during a repeat, including when their pictures expire. Each period uses
+the latest newly observed difference in its active grid once; missing input and
+late periods cannot defer that difference to another period.
 
 The sender expires pictures that missed their selection slots, selects one for
 the current slot and leaves future pictures queued. A slot without a picture
