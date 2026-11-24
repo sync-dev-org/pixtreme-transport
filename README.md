@@ -53,7 +53,7 @@ from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
 compiling an entry into an executable, define
 `PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
-Windows source builds install the core DLL `pixtreme_transport-14.dll` in `bin/`
+Windows source builds install the core DLL `pixtreme_transport-15.dll` in `bin/`
 and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
 Applications supply the DLL search directories as described in their own
 runtime configuration; module discovery does not change global search paths.
@@ -299,7 +299,7 @@ if errorlevel 1 exit /b 1
 build\example.exe
 ```
 
-The SDK installs `bin/pixtreme_transport-14.dll` and
+The SDK installs `bin/pixtreme_transport-15.dll` and
 `lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
 own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
 for this standalone example. A deployed application chooses its own DLL
@@ -582,7 +582,7 @@ int main(void) {
 }
 ```
 
-The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 14. Build C and C++ consumers and modules with ABI-14 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 13 from core 0.40.4. Windows consumers load `pixtreme_transport-14.dll`.
+The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 15. Build C and C++ consumers and modules with ABI-15 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 14. Windows consumers load `pixtreme_transport-15.dll`.
 
 Every extensible C record begins with `struct_size`. Set it to the accessible byte capacity, normally `sizeof(record)`, and pass the record by pointer. Each operation documents its mandatory input prefix and the defaults for omitted trailing fields. Output operations write only complete fields that fit, preserve the capacity, and leave unknown trailing bytes untouched. Status, category and boolean values use fixed-width integer storage. The common C header defines these rules and the immutable string view.
 
@@ -719,7 +719,7 @@ Indexing or `values()` can be retried on the returned immutable records; a later
 
 ### Update output consumers
 
-Use the following settings when moving output consumers to native ABI 14:
+Use the following settings when moving output consumers to native ABI 15:
 
 | Removed setting | Current configuration |
 | --- | --- |
@@ -729,16 +729,17 @@ Use the following settings when moving output consumers to native ABI 14:
 
 Read `phase_correction_ms` and `receipt_error_ms` for receipt-grid observations.
 The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fields
-have no field aliases. Rebuild native consumers and modules with ABI-14 headers,
+have no field aliases. Rebuild native consumers and modules with ABI-15 headers,
 then use `require_abi()` before other operations.
 
-The installed conformance suite has `CONFORMANCE_REVISION == 19`, exported by
+The installed conformance suite has `CONFORMANCE_REVISION == 20`, exported by
 `pixtreme.transport`. Consumers check their expected revision during collection.
 `EntranceConformance` checks opening without a first picture, stopping its wait,
 absent snapshots until successful delivery, and fatal missing stream observations
 or numbering on the first picture. It also preserves decoder scalar metadata
 from the source fixture.
-Every decoded picture includes `codec`; `faulty_reference` is present only when
+Every decoded picture includes `codec`, copied unchanged from the decoder as a string.
+The core supplies no codec-name enumeration and does not restrict its spelling; `faulty_reference` is present only when
 the decoder supplies it. The suite checks its exact boolean type and value when
 present and rejects adding or dropping the key relative to the fixture.
 The `slice_type` and `nal_unit_type` fields remain paired when supplied.
