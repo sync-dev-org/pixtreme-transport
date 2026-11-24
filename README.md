@@ -594,7 +594,27 @@ The GPU C API is in `<pixtreme/transport/c/gpu.h>`. Arrays retain a DLPack `DLTe
 
 `FrameTiming.received_at_ns` is optional signed 64-bit nanoseconds recording when an input module received the picture's access unit or capture frame. The input observes it once with C's `pixtreme_transport_now_ns`, C++'s `pixtreme::transport::now_ns()` or Python's `pixtreme.transport.values.now_ns()`. These operations read the same monotonic source as core sender pacing. Synthetic pictures and inputs without a receipt observation leave it absent. This value is separate from the input-number triple, media time and audio positions. Frame copies, capture, replacement, caller buffers and C/Python transfer preserve it. Python `frame.replace(received_at_ns=value)` sets it, `received_at_ns=None` clears it, and omission preserves it. C uses `PIXTREME_TRANSPORT_REPLACE_RECEIVED_AT_NS`; C++ uses the final optional replacement argument, whose outer optional selects replacement and whose inner optional carries or clears the value. The C timing descriptor and inspection record append a `const int64_t* received_at_ns`: NULL means absent, creation copies the value, and inspection borrows it until timing's final release. Older `struct_size` prefixes remain valid, including output records; zero is a present value.
 
-The entrance C API is in `<pixtreme/transport/c/entrance.h>`. Surface handles copy explicit source geometry and colour observations and retain allocation owners and producer readiness. Colour resolution exposes observed codes, resolved names and the axes that used defaults separately. A surface loan retains its return callback context and processing stream owner until the last source read finishes; `try_release` never waits on the host. Conversion returns the existing GPU frame handle with independent core-owned float32 Y/Cb/Cr pixels and a colour resolution handle. The protocol module returns its source loan separately from later frame consumers. The C++ entrance types wrap these C operations in their headers.
+The entrance C API is in `<pixtreme/transport/c/entrance.h>`. Validation borrows a pixtreme PixelBuffer; conversion consumes one source reference on success, rejection and failure. The core waits for recorded source uses, records its reads and releases its source reference on the supplied stream, following pixtreme's storage ownership contract independently of later frame consumers. Colour resolution exposes observed declarations, resolved names and the axes that used defaults separately. Conversion returns the existing GPU frame handle with independent core-owned float32 HWC pixels and a colour resolution handle. Channels retain the input's native model: Y, Cb, Cr for YCbCr, R, G, B for RGB, or Y for luma. A is appended only when the input carries alpha, giving 3/4, 3/4 or 1/2 channels respectively. Conversion delegates to pixtreme's `from_pixel_buffer`, preserving its sample values, bilinear chroma reconstruction and full-range alpha independently of the colour range. RGB has no matrix: the resolved matrix is an empty C string view or an empty C++/Python string, without a matrix fallback flag; the Frame's matrix remains absent. The C++ entrance types wrap these C operations in their headers.
+
+The entrance accepts the following combinations from the pixtreme 2.25.3 PixelBuffer contract (`docs/tokens.md`, "pixel format"). Depth means effective sample bits; alignment describes their position in the storage word. PixelBuffer construction validates depth and alignment before entrance validation.
+
+| PixelFormat tokens | Effective bit depths | Alignment |
+|---|---|---|
+| `nv12`, `nv16`, `yv12`, `uyvy422`, `vuya` | 8 | lsb |
+| `p010`, `p210`, `yuv444p10msb` | 10 | msb |
+| `p012`, `p212`, `yuv444p12msb` | 12 | msb |
+| `p016`, `p216` | 16 | lsb |
+| `v210` | 10 (three components per 32-bit word) | lsb |
+| `yuv420p`, `yuv422p`, `yuv444p` | 8, 10, 12–16 | lsb |
+| `yuva444p` | 8, 12–16 | lsb |
+| `rgba`, `bgra`, `rgb0`, `bgr0`, `gray8` | 8 | lsb |
+| `x2rgb10`, `x2bgr10` | 10 | lsb |
+| `gbrp`, `gbrap`, `gray`, `ya` | 8, 12–16 | lsb |
+| `gray16` | 16 | lsb |
+| `gray10msb` | 10 | msb |
+| `gray12msb` | 12 | msb |
+
+`yuva444p`, `vuya`, `rgba`, `bgra`, `gbrap` and `ya` carry alpha. `rgb0` and `bgr0` ignore their padding byte and produce three-channel RGB. A token/depth/alignment combination absent from pixtreme's contract cannot be constructed as a PixelBuffer; for example, pixtreme 2.25.3 does not support 10-bit `yuva444p` or 9/11-bit planar YCbCr. Callers must handle that rejection at the PixelBuffer construction boundary.
 
 The input-session C API is in `<pixtreme/transport/c/session_entrance.h>`. A sized callback table registers source open/start/receive/stop/close hooks and a retained context owner. Core owns the reception thread, producer serialization, audio slicing and shutdown. Modules publish GPU frames and PCM through C operations into the caller's drop buffer. Immutable stream-info and snapshot handles carry numbering, PCM and colour observations with each returned frame. C stop registrations let native module waits observe the same stop state as buffer waits. The C++ `session::Entrance` base builds the table in its header; its constructor taking a C buffer handle depends only on C symbols. Pass `buffer.native_handle()` from the C++ `session::FrameBuffer` wrapper. The session retains the caller's C buffer; its lifetime is independent of that wrapper object.
 
@@ -621,6 +641,14 @@ Readiness records producer completion and queues repeatable waits on consumer CU
 `pixtreme_transport_collect_completed` releases completed ordinary owners without waiting. Owners with `PIXTREME_TRANSPORT_OWNER_DEFER_COLLECTION` retain their callback and context until `pixtreme_transport_collect_completed_explicit`, wherever their last reference is released. Native collection and ordinary handle release never invoke these callbacks; the explicit collector satisfies their cleanup requirements and receives any callback failure through its status and error outputs. A failed callback is never invoked again. Older owner descriptors default to flags zero, whose final release still invokes the callback on that thread.
 
 The serialization C API is in `<pixtreme/transport/c/serialization.h>`. Immutable target, decision and inspection handles describe wire layouts without consuming pixels or waiting for readiness. Inspection entries expose typed scalar, string, array and plane-shape views; retaining an inspection keeps its views alive independently of the decision. Decisions bind source metadata and the lender's layout, and can be reused with other frame handles and allocations that match them.
+
+Luma-only float32 frames with Y or YA channels are accepted as gray sources.
+The effective view reports `source_representation="gray"` and starts its operations
+with `neutral-chroma-expand`. The serializer uses pixtreme channel routing to
+expand Y to neutral RGB or YCbCr before applying the requested colour conversion,
+sampling and quantization. Straight alpha is preserved for RGBA/BGRA, filled to
+opaque when absent, or discarded for formats without alpha. Matrix, colorspace
+and gamma changes retain their independent authorization requirements.
 
 `pixtreme_transport_serialization_execute` accepts the GPU API's frame handle, a decision, a borrowed destination description and the caller's selected-device stream. Device output writes into that exact lender allocation without a host wait. Host output stages on the device and completes its download before returning. Result inspection exposes the carrier region, lender owner, the GPU API's completion handle and the decision's same requested/effective inspection handles. Keep the result and lender alive through downstream reads; serializer completion does not track an external SDK's read completion. Low-level region preflight and pixel enqueue operations instead leave readiness and lifetime management to the caller. The C++ serialization headers own the corresponding C target, decision and result handles and provide cached C++ inspection values.
 
@@ -732,7 +760,7 @@ The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fie
 have no field aliases. Rebuild native consumers and modules with ABI-15 headers,
 then use `require_abi()` before other operations.
 
-The installed conformance suite has `CONFORMANCE_REVISION == 20`, exported by
+The installed conformance suite has `CONFORMANCE_REVISION == 21`, exported by
 `pixtreme.transport`. Consumers check their expected revision during collection.
 `EntranceConformance` checks opening without a first picture, stopping its wait,
 absent snapshots until successful delivery, and fatal missing stream observations
