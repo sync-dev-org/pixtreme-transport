@@ -48,6 +48,16 @@ Failures carry stable reasons: `invalid-module-name`, `module-not-found` (its gu
 
 Setting names use `.` for nesting, for example `connection.channel`. Values are text: decimal integers with an optional leading `-` (no `+`, spaces, `0x` or fractions), `true` or `false`, and rationals `<numerator>/<denominator>` with a positive denominator. Each module documents its keys. Errors name the key and never include its value. Module authors and C++ callers can use the header-only `<pixtreme/transport/module.h>`, which provides `pixtreme::transport::module::Options` for parsing and validating settings, `create_entrance` and `create_exit` returning an owning `Handle`, and `creation_boundary` for converting setting errors into the C error contract.
 
+Decoding inputs use `decode.library` (`nvdec` or `ffmpeg`); encoding outputs use `encode.library` (`nvenc` or `ffmpeg`). Module factories add the relevant core key constant to `Options`' `known_keys` and call the corresponding helper, rather than defining their own spellings or defaults. For example, an input factory can read its borrowed setting array this way, inside its `creation_boundary`:
+
+```cpp
+namespace pm = pixtreme::transport::module;
+const pm::Options options(data, count, stride, {"connection.channel", pm::decode_library_key});
+const pm::DecodeLibrary decoder = pm::decode_library(options);
+```
+
+An output factory uses `pm::encode_library_key` and `pm::encode_library(options)` to obtain an `EncodeLibrary`. Omission selects `DecodeLibrary::nvdec` or `EncodeLibrary::nvenc`; an empty string, a spelling from the opposite direction or any unrecognized value produces `OptionError` with the key path and allowed names, without the supplied value. `creation_boundary` maps it to `invalid-module-option`. `pm::library_name` converts either enum to the distribution suffix for a module's public inspection. These helpers only select a library; they do not load one, inspect capabilities or fall back to another. Modules retain their other schema, range and combination checks, and call the selected library on their own receive or send thread. An unsupported codec, format or setting must fail with a reason before the first picture.
+
 Module authors declare their entry with `PIXTREME_TRANSPORT_MODULE_EXPORT`
 from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
