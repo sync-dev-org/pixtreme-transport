@@ -56,7 +56,7 @@ const pm::Options options(data, count, stride, {"connection.channel", pm::decode
 const pm::DecodeLibrary decoder = pm::decode_library(options);
 ```
 
-An output factory uses `pm::encode_library_key` and `pm::encode_library(options)` to obtain an `EncodeLibrary`. Omission selects `DecodeLibrary::nvdec` or `EncodeLibrary::nvenc`; an empty string, a spelling from the opposite direction or any unrecognized value produces `OptionError` with the key path and allowed names, without the supplied value. `creation_boundary` maps it to `invalid-module-option`. `pm::library_name` converts either enum to the distribution suffix for a module's public inspection. These helpers only select a library; they do not load one, inspect capabilities or fall back to another. Modules retain their other schema, range and combination checks, and call the selected library on their own receive or send thread. An unsupported codec, format or setting must fail with a reason before the first picture.
+An output factory uses `pm::encode_library_key` and `pm::encode_library(options)` to obtain an `EncodeLibrary`. Omission selects `DecodeLibrary::nvdec` or `EncodeLibrary::nvenc`; an empty string, a spelling from the opposite direction or any unrecognized value produces `OptionError` with the key path and allowed names, without the supplied value. `creation_boundary` maps it to `invalid-module-option`. `pm::library_name` converts either enum to the library's distribution suffix. Because omission always selects the same library and a selection is never replaced, the selected library follows from the settings the caller passed; the core does not add a session field for it. These helpers only select a library; they do not load one, inspect capabilities or fall back to another. Modules retain their other schema, range and combination checks, and call the selected library on their own receive or send thread. An unsupported codec, format or setting must fail with a reason before the first picture.
 
 Module authors declare their entry with `PIXTREME_TRANSPORT_MODULE_EXPORT`
 from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
@@ -682,6 +682,15 @@ Encode and transform results carry owner references and opaque module contexts; 
 picture from the caller's buffer. `FrameSelectionMode.FIFO` is the default and
 takes pictures in queue order. It works with either `Pacing.CORE_CLOCK` or
 `Pacing.SDK_CLOCK`; `prefill_frames` controls its initial wait for queued pictures.
+`Pacing.NONE` selects periodless FIFO output and requires `prefill_frames=1`.
+It waits while the caller's buffer is empty and open, sends each picture once,
+and ends after the buffer closes and drains. It neither repeats pictures nor
+reads a clock or waits for a pacing deadline. Stop and cancellation end the
+input wait without closing the caller's buffer. Nominal frame periods still
+determine media time and audio sample counts; missing-PCM deadlines still
+start at picture selection. C++ uses `session::Pacing::none`; C uses
+`PIXTREME_TRANSPORT_PACING_NONE` (value 2). Core and SDK pacing retain values
+0 and 1 and their existing behavior; the native ABI remains 15.
 `FrameSelectionMode.RECEIPT_SCHEDULE` uses input receipt times and requires
 `Pacing.CORE_CLOCK` and `prefill_frames=1`. An SDK-paced output or another prefill
 count rejects receipt scheduling as a configuration error (`ValueError` in Python).
@@ -770,7 +779,7 @@ The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fie
 have no field aliases. Rebuild native consumers and modules with ABI-15 headers,
 then use `require_abi()` before other operations.
 
-The installed conformance suite has `CONFORMANCE_REVISION == 21`, exported by
+The installed conformance suite has `CONFORMANCE_REVISION == 22`, exported by
 `pixtreme.transport`. Consumers check their expected revision during collection.
 `EntranceConformance` checks opening without a first picture, stopping its wait,
 absent snapshots until successful delivery, and fatal missing stream observations
@@ -783,6 +792,11 @@ present and rejects adding or dropping the key relative to the fixture.
 The `slice_type` and `nal_unit_type` fields remain paired when supplied.
 `ExitConformance` adds the `frame-selection` and `receipt-time` scenes to check
 settings acceptance, configuration errors and fatal receipt-time absence.
+The `periodless` scene checks FIFO waits without repeats, input EOF, stopping
+empty input, settings validation and media/audio counts for `Pacing.NONE`.
+It uses the existing clock injection and observation controls to verify that
+periodless sending performs no pacing clock reads or waits. Exclude this scene
+through `ConformanceCapabilities.scenes` when the output mode is unsupported.
 An adapter declares unsupported output clocks through the existing `core-clock`
 and `sdk-clock` scene exclusions in `ConformanceCapabilities`; undeclared scenes
 run. These checks use the existing factory and failure-observation controls.
