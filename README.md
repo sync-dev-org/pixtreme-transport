@@ -679,6 +679,38 @@ The exit C API is in `<pixtreme/transport/c/exit.h>`. Modules register size-pref
 
 Encode and transform results carry owner references and opaque module contexts; serialization results use the existing typed C result handle. These references survive core GPU work and known encoder/SDK reads, including failures. A successful synchronous send reports both completions; asynchronous senders report video and audio separately using the ticket. Cancellation first stops admission and records a fatal failure, then requires the module's explicit proof that all admitted external reads and callbacks have ended. A stop request or failure alone is no such proof. Close finishes core workers, joins module reads and callbacks, finishes GPU work and returns retained loans before closing the target. It leaves the caller's buffer open. Derived C++ modules keep the same hook interface through the header-only `session::Exit`, `FrameTransform`, `SerializationTransform` and `SendClock` bases.
 
+Native output modules can override C++ `session::Exit::finish_sending(SendFinishReason)`
+or append the optional `finish_sending` callback in C's
+`pixtreme_transport_exit_callbacks`. The core calls it once per started sending
+worker, after the last ordinary `encode`/`send` and existing completion or
+cancellation waits, before publishing sender completion. It runs on the sending
+thread in the same CUDA context as `encode`/`send`, without the callback mutex or
+GIL, so a module can flush its encoder and finalize its output there. An unopened
+session or failed open does not call it; reopening starts a new call count.
+
+C++ `SendFinishReason::drained`, `stopped` and `failed` correspond to C's
+`PIXTREME_TRANSPORT_SEND_DRAINED`, `PIXTREME_TRANSPORT_SEND_STOPPED` and
+`PIXTREME_TRANSPORT_SEND_FAILED`. Acquisition fixes `drained` when it observes
+closed, empty input, or `stopped` when it observes a normal stop request. A later
+ordinary `close()` does not rewrite a completed drain. A recorded fatal or
+explicit cancellation takes precedence as `failed` at hook entry; recoverable
+diagnostics alone do not. Receipt scheduling can drain by sending or expiring
+pictures, so `drained` does not promise every received picture was sent. The
+reason describes that point in time, before the hook and later lifecycle work
+have succeeded. Every hook error, including a recoverable C status, becomes
+fatal while preserving an earlier fatal.
+
+The hook and its return supply no external read-completion proof. Its SDK reads
+belong to the module's existing `cancel_pending`/`finish_cancel` coordination:
+it can be invoked after cancellation proof and must start no new external reads
+then. Lifecycle `stop_target` notices can arrive during the hook; drain/failure
+notices must keep sends and callbacks operational and return promptly without
+waiting for the sending worker or every loan return. Existing unconfirmed-stop
+errors, close retries and owner retention still apply. The C++ default does no
+work. C tables omitting the whole trailing field, and NULL callbacks, retain the
+same behavior; the native ABI remains 16. Modules relying on finalization here
+must raise their core dependency's lower bound to the release providing it.
+
 ### Select pictures at the output
 
 `ExitSettings.frame_selection` selects how the sending thread obtains the current
