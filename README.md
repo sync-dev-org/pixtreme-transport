@@ -786,7 +786,7 @@ have no field aliases. Rebuild native consumers and modules with ABI-16 headers,
 then use `require_abi()` before other operations. ABI 15 modules are rejected
 because their settings conversions can discard an explicit receipt delay.
 
-The installed conformance suite has `CONFORMANCE_REVISION == 25`, exported by
+The installed conformance suite has `CONFORMANCE_REVISION == 26`, exported by
 `pixtreme.transport`. Consumers check their expected revision during collection.
 `EntranceConformance` checks opening without a first picture, stopping its wait,
 absent snapshots until successful delivery, and fatal missing stream observations
@@ -807,6 +807,16 @@ through `ConformanceCapabilities.scenes` when the output mode is unsupported.
 An adapter declares unsupported output clocks through the existing `core-clock`
 and `sdk-clock` scene exclusions in `ConformanceCapabilities`; undeclared scenes
 run. These checks use the existing factory and failure-observation controls.
+`ConformanceCapabilities.exit_frame_selections` optionally declares a frozenset
+of supported `"fifo"` and `"receipt_schedule"` selections; a declared set must
+include `"fifo"`. Omitting the field or leaving it `None` keeps all existing
+cases. A FIFO-only declaration excludes receipt-success parameters and the
+missing-receipt-time case, with the declaring field and mode in each reason.
+`exit.unsupported_frame_selection_is_rejected` then checks that a receipt
+selection fails at creation or open with a `ValueError` naming `frame_selection`.
+It rejects silent acceptance, unrelated setting errors and cleanup-only failures,
+and checks that the caller's buffer is unchanged. This rejection case is
+inapplicable when selections are undeclared or include receipt scheduling.
 
 ## Record session boundaries
 
