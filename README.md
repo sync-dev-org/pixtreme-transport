@@ -18,7 +18,7 @@ For a uv project:
 uv add pixtreme-transport
 ```
 
-The core depends on `pixtreme>=2.25.3`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
+The core depends on `pixtreme>=2.30.0`, which the package installer resolves automatically. Module developers can install the conformance suite's pytest dependency with the `testing` extra:
 
 ```bash
 pip install 'pixtreme-transport[testing]'
@@ -606,25 +606,28 @@ The GPU C API is in `<pixtreme/transport/c/gpu.h>`. Arrays retain a DLPack `DLTe
 
 The entrance C API is in `<pixtreme/transport/c/entrance.h>`. Validation borrows a pixtreme PixelBuffer; conversion consumes one source reference on success, rejection and failure. The core waits for recorded source uses, records its reads and releases its source reference on the supplied stream, following pixtreme's storage ownership contract independently of later frame consumers. Colour resolution exposes observed declarations, resolved names and the axes that used defaults separately. Conversion returns the existing GPU frame handle with independent core-owned float32 HWC pixels and a colour resolution handle. Channels retain the input's native model: Y, Cb, Cr for YCbCr, R, G, B for RGB, or Y for luma. A is appended only when the input carries alpha, giving 3/4, 3/4 or 1/2 channels respectively. Conversion delegates to pixtreme's `from_pixel_buffer`, preserving its sample values, bilinear chroma reconstruction and full-range alpha independently of the colour range. RGB has no matrix: the resolved matrix is an empty C string view or an empty C++/Python string, without a matrix fallback flag; the Frame's matrix remains absent. The C++ entrance types wrap these C operations in their headers.
 
-The entrance accepts the following combinations from the pixtreme 2.25.3 PixelBuffer contract (`docs/tokens.md`, "pixel format"). Depth means effective sample bits; alignment describes their position in the storage word. PixelBuffer construction validates depth and alignment before entrance validation.
+The entrance accepts the following combinations from the pixtreme 2.30.0 PixelBuffer contract (`docs/tokens.md`, "pixel format"). Depth means effective sample bits; alignment describes their position in the storage word. PixelBuffer construction validates depth and alignment before entrance validation. Words use little-endian byte order except the explicit `be` tokens.
 
 | PixelFormat tokens | Effective bit depths | Alignment |
 |---|---|---|
-| `nv12`, `nv16`, `yv12`, `uyvy422`, `vuya` | 8 | lsb |
+| `nv12`, `nv16`, `yv12`, `uyvy422`, `yuyv422`, `vuya`, `yuv410p`, `yuv411p` | 8 | lsb |
 | `p010`, `p210`, `yuv444p10msb` | 10 | msb |
 | `p012`, `p212`, `yuv444p12msb` | 12 | msb |
 | `p016`, `p216` | 16 | lsb |
 | `v210` | 10 (three components per 32-bit word) | lsb |
-| `yuv420p`, `yuv422p`, `yuv444p` | 8, 10, 12–16 | lsb |
-| `yuva444p` | 8, 12–16 | lsb |
-| `rgba`, `bgra`, `rgb0`, `bgr0`, `gray8` | 8 | lsb |
+| `yuv420p`, `yuv422p`, `yuv444p`, `yuv440p`, `yuva420p`, `yuva422p`, `yuva444p` | 8–16 | lsb |
+| `rgba`, `bgra`, `rgb0`, `bgr0`, `rgb24`, `bgr24`, `argb`, `abgr`, `0rgb`, `0bgr`, `gray8` | 8 | lsb |
 | `x2rgb10`, `x2bgr10` | 10 | lsb |
-| `gbrp`, `gbrap`, `gray`, `ya` | 8, 12–16 | lsb |
+| `gbrp`, `gbrap`, `gray`, `ya` | 8–16 | lsb |
+| `rgb48`, `bgr48`, `rgba64`, `bgra64` | 16 | lsb |
+| `gray16be`, `ya16be`, `rgb48be`, `rgba64be`, `gbrp16be`, `gbrap16be` | 16 (big-endian words) | lsb |
 | `gray16` | 16 | lsb |
 | `gray10msb` | 10 | msb |
 | `gray12msb` | 12 | msb |
 
-`yuva444p`, `vuya`, `rgba`, `bgra`, `gbrap` and `ya` carry alpha. `rgb0` and `bgr0` ignore their padding byte and produce three-channel RGB. A token/depth/alignment combination absent from pixtreme's contract cannot be constructed as a PixelBuffer; for example, pixtreme 2.25.3 does not support 10-bit `yuva444p` or 9/11-bit planar YCbCr. Callers must handle that rejection at the PixelBuffer construction boundary.
+`yuva420p`, `yuva422p`, `yuva444p`, `vuya`, `rgba`, `bgra`, `argb`, `abgr`, `rgba64`, `bgra64`, `rgba64be`, `gbrap`, `gbrap16be`, `ya` and `ya16be` carry straight alpha, normalized over its full effective range without multiplying the colour channels. `rgb0` and `bgr0` ignore their fourth byte; `0rgb` and `0bgr` ignore their first byte. These padding bytes produce no alpha channel. The big-endian tokens change only byte order, preserving the component values and scale of their little-endian counterparts. The continuous 8–16-bit families use 8-bit bytes or 16-bit LSB words for depths above 8. A token/depth/alignment combination absent from pixtreme's contract cannot be constructed as a PixelBuffer; for example, 10-bit `rgb24` and MSB-aligned `yuv420p` are invalid. Callers must handle that rejection at the PixelBuffer construction boundary.
+
+Chroma subsampling factors are `(4, 4)` for `yuv410p`, `(4, 1)` for `yuv411p`, `(1, 2)` for `yuv440p`, `(2, 2)` for 4:2:0 and `(2, 1)` for 4:2:2. Chroma dimensions round up independently. Siting offsets stay in luma-grid units: a chroma sample at `(k, l)` lies at `(sx*k + ox, sy*l + oy)`, with offset zero and no interpolation on an axis whose factor is 1. Thus `center` stays `(0.5, 0.5)` on subsampled axes even when a factor is 4. Conversion uses pixtreme's bilinear reconstruction and clamps at the stored chroma edges.
 
 The input-session C API is in `<pixtreme/transport/c/session_entrance.h>`. A sized callback table registers source open/start/receive/stop/close hooks and a retained context owner. Core owns the reception thread, producer serialization, audio slicing and shutdown. Modules publish GPU frames and PCM through C operations into the caller's drop or blocking buffer. A full blocking buffer waits for a consumer to make room, both for core reception and module callback publication. Session stop or close cancels the pending publication without accepting or counting its picture and leaves the caller's buffer open. PCM writes and consumers can progress while publication waits. Immutable stream-info and snapshot handles carry numbering, PCM and colour observations with each returned frame. C stop registrations let native module waits observe the same stop state as buffer waits. The C++ `session::Entrance` base builds the table in its header; its constructor taking a C buffer handle depends only on C symbols. Pass `buffer.native_handle()` from the C++ `session::FrameBuffer` wrapper. The session retains the caller's C buffer; its lifetime is independent of that wrapper object.
 
