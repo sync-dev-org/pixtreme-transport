@@ -782,7 +782,7 @@ The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fie
 have no field aliases. Rebuild native consumers and modules with ABI-15 headers,
 then use `require_abi()` before other operations.
 
-The installed conformance suite has `CONFORMANCE_REVISION == 22`, exported by
+The installed conformance suite has `CONFORMANCE_REVISION == 24`, exported by
 `pixtreme.transport`. Consumers check their expected revision during collection.
 `EntranceConformance` checks opening without a first picture, stopping its wait,
 absent snapshots until successful delivery, and fatal missing stream observations
