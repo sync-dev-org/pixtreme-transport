@@ -63,7 +63,7 @@ from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
 compiling an entry into an executable, define
 `PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
-Windows source builds install the core DLL `pixtreme_transport-15.dll` in `bin/`
+Windows source builds install the core DLL `pixtreme_transport-16.dll` in `bin/`
 and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
 Applications supply the DLL search directories as described in their own
 runtime configuration; module discovery does not change global search paths.
@@ -309,7 +309,7 @@ if errorlevel 1 exit /b 1
 build\example.exe
 ```
 
-The SDK installs `bin/pixtreme_transport-15.dll` and
+The SDK installs `bin/pixtreme_transport-16.dll` and
 `lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
 own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
 for this standalone example. A deployed application chooses its own DLL
@@ -592,7 +592,7 @@ int main(void) {
 }
 ```
 
-The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 15. Build C and C++ consumers and modules with ABI-15 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 14. Windows consumers load `pixtreme_transport-15.dll`.
+The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 16. Build C and C++ consumers and modules with ABI-16 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 15. Windows consumers load `pixtreme_transport-16.dll`.
 
 Every extensible C record begins with `struct_size`. Set it to the accessible byte capacity, normally `sizeof(record)`, and pass the record by pointer. Each operation documents its mandatory input prefix and the defaults for omitted trailing fields. Output operations write only complete fields that fit, preserve the capacity, and leave unknown trailing bytes untouched. Status, category and boolean values use fixed-width integer storage. The common C header defines these rules and the immutable string view.
 
@@ -693,7 +693,7 @@ input wait without closing the caller's buffer. Nominal frame periods still
 determine media time and audio sample counts; missing-PCM deadlines still
 start at picture selection. C++ uses `session::Pacing::none`; C uses
 `PIXTREME_TRANSPORT_PACING_NONE` (value 2). Core and SDK pacing retain values
-0 and 1 and their existing behavior; the native ABI remains 15.
+0 and 1 and their existing behavior; the native ABI remains 16.
 `FrameSelectionMode.RECEIPT_SCHEDULE` uses input receipt times and requires
 `Pacing.CORE_CLOCK` and `prefill_frames=1`. An SDK-paced output or another prefill
 count rejects receipt scheduling as a configuration error (`ValueError` in Python).
@@ -703,12 +703,15 @@ C++ uses `session::FrameSelectionMode::fifo` and
 `PIXTREME_TRANSPORT_FRAME_SELECTION_FIFO` and
 `PIXTREME_TRANSPORT_FRAME_SELECTION_RECEIPT_SCHEDULE` in
 `pixtreme_transport_exit_settings_options.frame_selection`; the same options
-record also carries `max_phase_step_ms`.
+record also carries `max_phase_step_ms` and the optional `has_delay_frames` /
+`delay_frames` pair. An explicit presence flag requires the complete value field.
 
-For receipt scheduling, choose the caller's buffer capacity N and nominal frame
-period T. N counts waiting pictures and excludes the retained picture used for
-repeats. The scheduling delay is D = N × T: a two-picture buffer at 25 fps gives
-D = 80 ms. For the first picture's input number k0 and receipt time r0, picture k
+For receipt scheduling, choose the delay `delay_frames` N, caller buffer capacity
+M and nominal frame period T. M counts waiting pictures and excludes the retained
+picture used for repeats. N must be a positive integer no greater than M;
+omitting it uses M. Other selection modes reject an explicit delay. The
+scheduling delay is D = N × T: N = 2 at 25 fps gives D = 80 ms, including when
+M = 3. Extra storage retains early pictures without increasing the delay. For the first picture's input number k0 and receipt time r0, picture k
 is selected at `r0 + D + (k - k0) * T + phase_correction`. Use consistent time
 units in this formula; `received_at_ns` stores nanoseconds. Selection starts the
 current picture's serialization and encoding immediately. D ends at selection;
@@ -769,20 +772,21 @@ Indexing or `values()` can be retried on the returned immutable records; a later
 
 ### Update output consumers
 
-Use the following settings when moving output consumers to native ABI 15:
+Use the following settings when moving output consumers to native ABI 16:
 
 | Removed setting | Current configuration |
 | --- | --- |
 | `follow_input` | Select `frame_selection`: `FIFO` for queue order, or `RECEIPT_SCHEDULE` for a receipt grid on a core-paced output. |
-| `target_buffer_wait_ms` | Choose buffer capacity N; receipt scheduling derives D = N × T from capacity and the nominal period. |
+| `target_buffer_wait_ms` | Set `delay_frames` N and buffer capacity M independently; D = N × T, with 1 ≤ N ≤ M. Omission uses M. |
 | `max_follow_step_ms` | Set `max_phase_step_ms`, the maximum receipt-phase change per period. |
 
 Read `phase_correction_ms` and `receipt_error_ms` for receipt-grid observations.
 The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fields
-have no field aliases. Rebuild native consumers and modules with ABI-15 headers,
-then use `require_abi()` before other operations.
+have no field aliases. Rebuild native consumers and modules with ABI-16 headers,
+then use `require_abi()` before other operations. ABI 15 modules are rejected
+because their settings conversions can discard an explicit receipt delay.
 
-The installed conformance suite has `CONFORMANCE_REVISION == 24`, exported by
+The installed conformance suite has `CONFORMANCE_REVISION == 25`, exported by
 `pixtreme.transport`. Consumers check their expected revision during collection.
 `EntranceConformance` checks opening without a first picture, stopping its wait,
 absent snapshots until successful delivery, and fatal missing stream observations
