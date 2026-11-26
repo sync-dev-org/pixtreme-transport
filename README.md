@@ -781,17 +781,49 @@ phase during a repeat, including when their pictures expire. Each period uses
 the latest newly observed difference in its active grid once; missing input and
 late periods cannot defer that difference to another period.
 
-The sender expires pictures that missed their selection slots, selects one for
-the current slot and leaves future pictures queued. A slot without a picture
-repeats the last picture with silence. Expiry removes the picture's audio and
-side data together and advances neither accepted-frame counts nor completion
+The sender selects one picture for the current slot and leaves future pictures
+queued. A picture past its own slot stays queued while it entered the caller's
+buffer by its own receipt time + D and the selection time has not passed that
+receipt time + D + T. The sender selects such a picture, with its audio, in a
+period whose slot has no picture, instead of repeating the last picture; later
+slots keep their selection times. A picture for the current slot takes the
+period, and the earlier pictures expire. Other pictures past their slots expire.
+The caller's buffer records each waiting picture's acceptance time with the
+core's monotonic clock for this rule; its public `try_select` operations keep
+their expired, current and future classification. A slot without a picture to
+select repeats the last picture with silence. Expiry removes the picture's audio
+and side data together and advances neither accepted-frame counts nor completion
 coordinates. Output media time and audio sample counts follow the nominal period.
 The sender catches up while at most four periods late. Beyond four periods it
-closes missed slots and resumes at the next future slot, preserving the grid
-origin, D and phase. Input restart, number-scope changes and period changes start
+closes missed slots, expires their pictures even when they could otherwise be
+selected after their slot, and resumes at the next future slot, preserving the
+grid origin, D and phase. Input restart, number-scope changes and period changes start
 a new grid at the new range's first receipt and reset phase feedback. Old-range
 pictures retain their old slots until the new grid starts; remaining old pictures
 then expire.
+
+Within one number range, two consecutive pictures whose receipts differ from the
+grid by more than D/2 start a new grid with the same D and a reset phase. The
+new grid starts at the first of the two pictures when that picture still waits
+in the buffer, entered it by its receipt time + D, has not passed its receipt
+time + D + T, and the first picture's grid selects it no later than the second
+picture's grid would. Otherwise it starts at the second picture. Pictures of the
+previous grid that remain past the new grid's start expire unless they can still
+be selected after their slot. `Exit.inspection` exposes `schedule_reanchor_count`
+for these steps and `late_selected_frames` for pictures selected after their slot,
+both counted from open (`pixtreme_transport_exit_inspection_info` in C).
+
+A later grid, after a range change or a receipt step, takes over when its start
+is not after the time of the active grid's current slot. The comparison uses
+that slot's time, not the time at which the sender reaches the slot: a grid that
+starts after the slot's time leaves that slot to the active grid even when the
+sender is late, and takes over afterwards. Each selection applies this rule and
+the four-period rule to every picture waiting at that moment, including pictures
+that entered the buffer during its wait. When a selection first observes a grid
+that takes over, it selects that grid's picture for the current slot there,
+without repeating first, and the grid's later slots keep their times. A
+selection that closes missed slots hands off no picture; the sender waits for
+the next slot.
 
 Call `Exit.take_drops()` to drain the sender's expiry records into immutable
 `FrameDropRecords` (`pixtreme_transport_exit_take_drops` in C). Each record exposes
