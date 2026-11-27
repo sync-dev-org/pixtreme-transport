@@ -63,7 +63,7 @@ from `<pixtreme/transport/c/module.h>` and `extern "C"` in C++. This exports the
 shared entry on Windows independently of the core's import declarations. When
 compiling an entry into an executable, define
 `PIXTREME_TRANSPORT_MODULE_STATIC_DEFINE` and use its suffixed entry name.
-Windows source builds install the core DLL `pixtreme_transport-16.dll` in `bin/`
+Windows source builds install the core DLL `pixtreme_transport-17.dll` in `bin/`
 and its import library `pixtreme_transport.lib` in `lib/` under `pixtreme/transport`.
 Applications supply the DLL search directories as described in their own
 runtime configuration; module discovery does not change global search paths.
@@ -309,7 +309,7 @@ if errorlevel 1 exit /b 1
 build\example.exe
 ```
 
-The SDK installs `bin/pixtreme_transport-16.dll` and
+The SDK installs `bin/pixtreme_transport-17.dll` and
 `lib/pixtreme_transport.lib` below `pixtreme/transport`; pixtreme supplies its
 own `bin/pixtreme-2.dll`. Conan's run environment supplies both DLL directories
 for this standalone example. A deployed application chooses its own DLL
@@ -592,7 +592,7 @@ int main(void) {
 }
 ```
 
-The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 16. Build C and C++ consumers and modules with ABI-16 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 15. Windows consumers load `pixtreme_transport-16.dll`.
+The shared library exports only C functions. C++ classes, exceptions, virtual hooks and automatic resource release are defined in the installed headers; no C++ object layout crosses the library boundary. The current native ABI is 17. Build C and C++ consumers and modules with ABI-17 headers and check compatibility before other operations. The runtime rejects earlier ABI expectations, including ABI 16. Windows consumers load `pixtreme_transport-17.dll`.
 
 Every extensible C record begins with `struct_size`. Set it to the accessible byte capacity, normally `sizeof(record)`, and pass the record by pointer. Each operation documents its mandatory input prefix and the defaults for omitted trailing fields. Output operations write only complete fields that fit, preserve the capacity, and leave unknown trailing bytes untouched. Status, category and boolean values use fixed-width integer storage. The common C header defines these rules and the immutable string view.
 
@@ -708,7 +708,7 @@ notices must keep sends and callbacks operational and return promptly without
 waiting for the sending worker or every loan return. Existing unconfirmed-stop
 errors, close retries and owner retention still apply. The C++ default does no
 work. C tables omitting the whole trailing field, and NULL callbacks, retain the
-same behavior; the native ABI remains 16. Modules relying on finalization here
+same behavior; the native ABI is 17. Modules relying on finalization here
 must raise their core dependency's lower bound to the release providing it.
 
 ### Select pictures at the output
@@ -725,7 +725,7 @@ input wait without closing the caller's buffer. Nominal frame periods still
 determine media time and audio sample counts; missing-PCM deadlines still
 start at picture selection. C++ uses `session::Pacing::none`; C uses
 `PIXTREME_TRANSPORT_PACING_NONE` (value 2). Core and SDK pacing retain values
-0 and 1 and their existing behavior; the native ABI remains 16.
+0 and 1 and their existing behavior; the native ABI is 17.
 `FrameSelectionMode.RECEIPT_SCHEDULE` uses input receipt times and requires
 `Pacing.CORE_CLOCK` and `prefill_frames=1`. An SDK-paced output or another prefill
 count rejects receipt scheduling as a configuration error (`ValueError` in Python).
@@ -743,9 +743,11 @@ M and nominal frame period T. M counts waiting pictures and excludes the retaine
 picture used for repeats. N must be a positive integer no greater than M;
 omitting it uses M. Other selection modes reject an explicit delay. The
 scheduling delay is D = N × T: N = 2 at 25 fps gives D = 80 ms, including when
-M = 3. Extra storage retains early pictures without increasing the delay. For the first picture's input number k0 and receipt time r0, picture k
-is selected at `r0 + D + (k - k0) * T + phase_correction`. Use consistent time
-units in this formula; `received_at_ns` stores nanoseconds. Selection starts the
+M = 3. Extra storage retains early pictures without increasing the delay.
+For input number k, define media time `x_k = (k - k0) * T`. The exit estimates
+a local monotonic mapping F from input numbers and receipt observations, then
+selects on `s_k = F(x_k) + D`. This estimates input progression and does not
+reconstruct an unobserved sender clock. `received_at_ns` stores nanoseconds. Selection starts the
 current picture's serialization and encoding immediately. D ends at selection;
 the SDK receives the picture after encoding finishes.
 
@@ -768,62 +770,34 @@ A receipt-scheduled output reports fatal `receipt-time-unavailable` for a pictur
 without that observation, before accepting or sending it. Synthetic pictures
 without receipt observations can use FIFO.
 
-Receipt phase feedback observes the difference between actual receipt time and
-the grid's expected receipt time. It follows clock drift using at most
-`max_phase_step_ms` per output period; the current provisional default is 5 ms,
-pending receiver measurements. Processing completion, buffer admission and audio
-waiting do not feed this correction. Missing input and sender lateness do not
-accumulate feedback. `Exit.inspection` exposes `frame_selection`, `schedule_scope`,
-`phase_correction_ms` and optional `receipt_error_ms`. The last value is the latest
-actual receipt minus the grid's expected receipt, including its current phase;
-it stays unchanged until another receipt is observed. New receipts can correct
-phase during a repeat, including when their pictures expire. Each period uses
-the latest newly observed difference in its active grid once; missing input and
-late periods cannot defer that difference to another period.
+Each picture k is eligible on `[s_k, s_(k+1))`, including the start and excluding
+its end. Missing input numbers still have nominal scheduled times. Each cycle
+selects at most one unsent eligible picture, leaves future pictures queued and
+expires pictures whose intervals have ended. An empty interval repeats the last
+picture with silence; expired pictures lose their audio and ancillary data
+together without advancing accepted-frame counts or completion coordinates.
+A late sender skips elapsed intervals and continues at the current interval.
+Input receipt + D is not a second deadline. There is no later-slot rescue.
 
-The sender selects one picture for the current slot and leaves future pictures
-queued. A picture past its own slot stays queued while it entered the caller's
-buffer by its own receipt time + D and the selection time has not passed that
-receipt time + D + T. The sender selects such a picture, with its audio, in a
-period whose slot has no picture, instead of repeating the last picture; later
-slots keep their selection times. A picture for the current slot takes the
-period, and the earlier pictures expire. Other pictures past their slots expire.
-The caller's buffer records each waiting picture's acceptance time with the
-core's monotonic clock for this rule; its public `try_select` operations keep
-their expired, current and future classification. A slot without a picture to
-select repeats the last picture with silence. Expiry removes the picture's audio
-and side data together and advances neither accepted-frame counts nor completion
-coordinates. Output media time and audio sample counts follow the nominal period.
-The sender catches up while at most four periods late. Beyond four periods it
-closes missed slots, expires their pictures even when they could otherwise be
-selected after their slot, and resumes at the next future slot, preserving the
-grid origin, D and phase. Input restart, number-scope changes and period changes start
-a new grid at the new range's first receipt and reset phase feedback. Old-range
-pictures retain their old slots until the new grid starts; remaining old pictures
-then expire.
+F smooths receipt jitter and follows input progression with normal corrections
+bounded by `max_phase_step_ms` per cycle (default 5 ms). A normal correction
+applies to subsequent cycles after the current cycle's wait has begun. Processing
+completion, buffer admission, occupancy and audio waiting do not feed F. Missing
+input and sender lateness retain the last estimated progression. Persistent
+receipt steps, input restarts, numbering-scope changes and cadence changes replace
+the one mapping for unsent work, without retaining predecessor mappings or
+rewinding consumed input numbers. A reset does not receive normal correction a
+second time in the same cycle. D remains N*T throughout.
 
-Within one number range, two consecutive pictures whose receipts differ from the
-grid by more than D/2 start a new grid with the same D and a reset phase. The
-new grid starts at the first of the two pictures when that picture still waits
-in the buffer, entered it by its receipt time + D, has not passed its receipt
-time + D + T, and the first picture's grid selects it no later than the second
-picture's grid would. Otherwise it starts at the second picture. Pictures of the
-previous grid that remain past the new grid's start expire unless they can still
-be selected after their slot. `Exit.inspection` exposes `schedule_reanchor_count`
-for these steps and `late_selected_frames` for pictures selected after their slot,
-both counted from open (`pixtreme_transport_exit_inspection_info` in C).
+`Exit.inspection` exposes `frame_selection`, `schedule_scope`,
+`phase_correction_ms`, optional `receipt_error_ms` and `schedule_reanchor_count`.
+The error is the last observed receipt minus F's expected receipt at observation.
+The reanchor counter counts persistent receipt steps since open, excluding input
+range, discontinuity and cadence changes. The same fields are available through
+`pixtreme_transport_exit_inspection_info` in C. FIFO keeps its four-period catch-up
+rule. Output media time and audio sample counts always count sent nominal periods,
+independently of F and the playout times.
 
-A later grid, after a range change or a receipt step, takes over when its start
-is not after the time of the active grid's current slot. The comparison uses
-that slot's time, not the time at which the sender reaches the slot: a grid that
-starts after the slot's time leaves that slot to the active grid even when the
-sender is late, and takes over afterwards. Each selection applies this rule and
-the four-period rule to every picture waiting at that moment, including pictures
-that entered the buffer during its wait. When a selection first observes a grid
-that takes over, it selects that grid's picture for the current slot there,
-without repeating first, and the grid's later slots keep their times. A
-selection that closes missed slots hands off no picture; the sender waits for
-the next slot.
 
 Call `Exit.take_drops()` to drain the sender's expiry records into immutable
 `FrameDropRecords` (`pixtreme_transport_exit_take_drops` in C). Each record exposes
@@ -836,7 +810,7 @@ Indexing or `values()` can be retried on the returned immutable records; a later
 
 ### Update output consumers
 
-Use the following settings when moving output consumers to native ABI 16:
+Use the following settings when moving output consumers to native ABI 17:
 
 | Removed setting | Current configuration |
 | --- | --- |
@@ -846,7 +820,7 @@ Use the following settings when moving output consumers to native ABI 16:
 
 Read `phase_correction_ms` and `receipt_error_ms` for receipt-grid observations.
 The removed `pacing_correction_ms`, `buffer_wait_ms` and C `has_buffer_wait` fields
-have no field aliases. Rebuild native consumers and modules with ABI-16 headers,
+have no field aliases. Rebuild native consumers and modules with ABI-17 headers,
 then use `require_abi()` before other operations. ABI 15 modules are rejected
 because their settings conversions can discard an explicit receipt delay.
 
